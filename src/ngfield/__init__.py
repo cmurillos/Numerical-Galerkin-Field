@@ -35,6 +35,7 @@ from .spaces import (
     ComponentBasis,
     FiniteElementBasis,
     PolynomialBasis,
+    ProductBasis,
     TransformedBasis,
 )
 
@@ -52,6 +53,7 @@ __all__ = [
     "GeneralGalerkinField",
     "GalerkinProblem",
     "PolynomialBasis",
+    "ProductBasis",
     "Problem",
     "LegacyGalerkinField",
     "SimplicialDomain",

@@ -6,7 +6,7 @@ import math
 import numpy as np
 import torch
 
-from ngfield import FiniteElementBasis, GalerkinProblem, grad, inner
+from ngfield import GalerkinProblem, grad, inner
 
 
 def torus_mesh(major_radius=2.0, minor_radius=0.5, n_major=12, n_minor=8):
@@ -39,8 +39,8 @@ def weak(u, v, dx, ds):
 def main():
     vertices, simplices = torus_mesh()
     problem = GalerkinProblem(vertices=vertices, simplices=simplices, weak=weak)
-    basis = FiniteElementBasis(problem.geometry)
-    field = problem.field(basis=basis, quadrature_order=2)
+    basis = problem.basis("laplacian", size=16)
+    field = problem.field(basis=basis)
     z = torch.sin(torch.linspace(0, 2 * math.pi, basis.dimension, dtype=field.dtype))
     result = field(z)
     print(
@@ -51,6 +51,8 @@ def main():
                 "boundary_facets": len(problem.geometry.exterior_faces),
                 "vertices": len(vertices),
                 "triangles": len(simplices),
+                "modes": basis.dimension,
+                "first_eigenvalues": basis.eigenvalues[:5].tolist(),
                 "field_norm": torch.linalg.vector_norm(result).item(),
             },
             indent=2,

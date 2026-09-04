@@ -4,7 +4,7 @@ import json
 
 import torch
 
-from ngfield import Coefficient, FiniteElementBasis, GalerkinProblem, grad, inner, pointwise
+from ngfield import Coefficient, GalerkinProblem, grad, inner, pointwise
 
 
 def main():
@@ -19,7 +19,7 @@ def main():
         simplices=[[0, 1], [1, 2]],
         weak=weak,
     )
-    basis = FiniteElementBasis(problem.geometry)
+    basis = problem.basis("laplacian", size=3)
     field = problem.field(basis=basis, quadrature_order=6)
     z = torch.tensor([0.1, -0.2, 0.3], dtype=field.dtype, requires_grad=True)
     result = field(z)

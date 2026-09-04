@@ -100,6 +100,30 @@ def _gram(table):
     return torch.einsum("qnd,qmd,q->nm", values, values, table.weights)
 
 
+def _basis_contract(problem, basis):
+    if not isinstance(getattr(basis, "dimension", None), int) or basis.dimension < 1:
+        raise ValueError("basis.dimension must be a positive integer.")
+    try:
+        value_shape = tuple(basis.value_shape)
+    except (AttributeError, TypeError) as exc:
+        raise ValueError("basis.value_shape must be a tuple of positive integers.") from exc
+    if any(not isinstance(size, int) or isinstance(size, bool) or size < 1 for size in value_shape):
+        raise ValueError("basis.value_shape must contain positive integers.")
+    if not callable(getattr(basis, "evaluate", None)):
+        raise ValueError("A basis must implement evaluate(points, order=...).")
+    if hasattr(basis, "geometry") and not problem.geometry.same_mesh(basis.geometry):
+        raise ValueError("The basis belongs to a different mesh.")
+    return value_shape
+
+
+def _tolerance(value, dtype=torch.float64):
+    if value is None:
+        return 5e-5 if dtype == torch.float32 else 1e-8
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 < value < 1:
+        raise ValueError("orthonormality tolerance must be a real number between zero and one.")
+    return float(value)
+
+
 class GalerkinProblem:
     """A simplicial geometry plus one complete weak form.
 
@@ -150,13 +174,18 @@ class GalerkinProblem:
     def regions(self):
         return self.geometry.regions
 
+    def basis(self, family="laplacian", **options):
+        """Build a fixed L2-orthonormal basis adapted to this geometry."""
+        from .basis_factory import build_basis
+
+        return build_basis(self, family, options)
+
     def field(
         self,
         *,
         basis,
-        quadrature_order=4,
+        quadrature_order=None,
         quadrature_rule=None,
-        mass_matrix=None,
         max_quadrature_points=1_000_000,
         max_intermediate_entries=10_000_000,
         device="cpu",
@@ -167,7 +196,6 @@ class GalerkinProblem:
             basis,
             quadrature_order=quadrature_order,
             quadrature_rule=quadrature_rule,
-            mass_matrix=mass_matrix,
             max_quadrature_points=max_quadrature_points,
             max_intermediate_entries=max_intermediate_entries,
             device=device,
@@ -179,12 +207,20 @@ class GalerkinProblem:
         basis,
         *,
         quadrature_order=6,
+        validation_order=None,
         quadrature_rule=None,
+        tolerance=1e-8,
         max_quadrature_points=1_000_000,
     ):
-        """Return an equivalent basis orthonormal in the numerical L2 metric."""
-        if hasattr(basis, "geometry") and not self.geometry.same_mesh(basis.geometry):
-            raise ValueError("The finite-element basis belongs to a different mesh.")
+        """Return a new fixed basis orthonormal in the numerical L2 metric."""
+        _basis_contract(self, basis)
+        quadrature_order = positive_integer(quadrature_order, "quadrature_order", 0)
+        validation_order = (
+            quadrature_order + 2
+            if validation_order is None
+            else positive_integer(validation_order, "validation_order", 0)
+        )
+        tolerance = _tolerance(tolerance)
         table = _table(
             self.geometry,
             basis,
@@ -204,22 +240,73 @@ class GalerkinProblem:
         except torch.linalg.LinAlgError as exc:
             raise ValueError("The basis Gram matrix is not positive definite.") from exc
         identity = torch.eye(basis.dimension, dtype=gram.dtype)
-        return TransformedBasis(
+        result = TransformedBasis(
             basis, torch.linalg.solve_triangular(factor.T, identity, upper=True)
         )
+        result.family = "orthonormalized"
+        result.quadrature_order = quadrature_order
+        result.validation_order = validation_order
+        result.orthonormality_error = self.validate_basis(
+            result,
+            quadrature_order=validation_order,
+            quadrature_rule=quadrature_rule,
+            tolerance=tolerance,
+            max_quadrature_points=max_quadrature_points,
+        )
+        return result
+
+    def validate_basis(
+        self,
+        basis,
+        *,
+        quadrature_order=None,
+        quadrature_rule=None,
+        tolerance=1e-8,
+        max_quadrature_points=1_000_000,
+    ):
+        """Validate the basis contract and return its maximum L2 Gram error."""
+        _basis_contract(self, basis)
+        order = (
+            getattr(basis, "validation_order", getattr(basis, "quadrature_order", 4))
+            if quadrature_order is None
+            else quadrature_order
+        )
+        order = positive_integer(order, "quadrature_order", 0)
+        tolerance = _tolerance(tolerance)
+        table = _table(
+            self.geometry,
+            basis,
+            {0},
+            set(),
+            order,
+            None,
+            None,
+            quadrature_rule,
+            max_quadrature_points,
+            "cpu",
+            torch.float64,
+        )
+        gram = _gram(table)
+        error = float(torch.max(torch.abs(gram - torch.eye(basis.dimension))).item())
+        if error > tolerance:
+            raise ValueError(
+                "The operational basis must be L2-orthonormal: "
+                f"max|M-I|={error:.3e} exceeds {tolerance:.3e}. "
+                "Use problem.orthonormalize(...) or problem.basis(...)."
+            )
+        return error
 
 
 class GalerkinField:
-    """The coordinate velocity G defined by M G(z) = a(Phi z; phi_i)."""
+    """The coordinate velocity G_i(z) = a(Phi z; phi_i) in an orthonormal basis."""
 
     def __init__(
         self,
         problem,
         basis,
         *,
-        quadrature_order=4,
+        quadrature_order=None,
         quadrature_rule=None,
-        mass_matrix=None,
         max_quadrature_points=1_000_000,
         max_intermediate_entries=10_000_000,
         device="cpu",
@@ -227,11 +314,9 @@ class GalerkinField:
     ):
         if dtype not in (torch.float32, torch.float64):
             raise ValueError("Use torch.float32 or torch.float64.")
-        if not isinstance(getattr(basis, "dimension", None), int) or basis.dimension < 1:
-            raise ValueError("basis.dimension must be a positive integer.")
-        value_shape = tuple(getattr(basis, "value_shape", ()))
-        if hasattr(basis, "geometry") and not problem.geometry.same_mesh(basis.geometry):
-            raise ValueError("The finite-element basis belongs to a different mesh.")
+        value_shape = _basis_contract(problem, basis)
+        if quadrature_order is None:
+            quadrature_order = getattr(basis, "quadrature_order", 4)
         quadrature_order = positive_integer(quadrature_order, "quadrature_order", 0)
         max_quadrature_points = positive_integer(max_quadrature_points, "max_quadrature_points")
         self.max_intermediate_entries = positive_integer(
@@ -278,23 +363,19 @@ class GalerkinField:
             )
             for name, orders in required["boundary"].items()
         }
-        if mass_matrix is None:
-            mass = _gram(self._volume)
-        else:
-            mass = torch.as_tensor(mass_matrix, dtype=dtype, device=device)
-            if mass.shape != (self.dimension, self.dimension):
-                raise ValueError("mass_matrix must have shape [N,N].")
-        if not torch.isfinite(mass).all() or not torch.allclose(
-            mass, mass.T, rtol=1e-7, atol=1e-10
-        ):
-            raise ValueError("The Gram/mass matrix must be finite and symmetric.")
-        try:
-            self._mass_factor = torch.linalg.cholesky((mass + mass.T) / 2)
-        except torch.linalg.LinAlgError as exc:
+        mass = _gram(self._volume)
+        tolerance = _tolerance(None, dtype)
+        error = torch.max(
+            torch.abs(mass - torch.eye(self.dimension, dtype=dtype, device=device))
+        ).item()
+        if error > tolerance:
             raise ValueError(
-                "The Gram/mass matrix is not positive definite; check basis independence and quadrature."
-            ) from exc
+                "The operational basis must be L2-orthonormal: "
+                f"max|M-I|={error:.3e} exceeds {tolerance:.3e}. "
+                "Use problem.orthonormalize(...) or problem.basis(...)."
+            )
         self.mass_matrix = mass
+        self.orthonormality_error = float(error)
 
     @property
     def device(self):
@@ -310,7 +391,7 @@ class GalerkinField:
 
     @property
     def table_bytes(self):
-        tensors = [self.mass_matrix, self._mass_factor]
+        tensors = [self.mass_matrix]
         for table in (*self._volumes.values(), *self._boundary.values()):
             tensors.extend((table.points, table.weights, table.cells, table.barycentric))
             tensors.extend(table.basis.values())
@@ -327,7 +408,6 @@ class GalerkinField:
         for table in (*self._volumes.values(), *self._boundary.values()):
             table.to(device, dtype)
         self.mass_matrix = self.mass_matrix.to(device=device, dtype=dtype)
-        self._mass_factor = torch.linalg.cholesky((self.mass_matrix + self.mass_matrix.T) / 2)
         return self
 
     def reconstruct(self, z, *, boundary=None):
@@ -390,5 +470,4 @@ class GalerkinField:
             ],
             dim=1,
         )
-        value = torch.cholesky_solve(action.T, self._mass_factor).T
-        return value[0] if single else value
+        return action[0] if single else action

@@ -30,7 +30,7 @@ def interval_problem(coefficient, *, vertices=None, simplices=None, boundary=Fal
         return coefficient * u * v * measure
 
     problem = GalerkinProblem(vertices=vertices, simplices=simplices, weak=weak)
-    basis = FiniteElementBasis(problem.geometry)
+    basis = problem.orthonormalize(FiniteElementBasis(problem.geometry), quadrature_order=4)
     return problem.field(basis=basis, quadrature_order=4)
 
 
@@ -43,7 +43,8 @@ def test_callable_and_vertex_coefficients_match_exact_linear_field_and_are_fixed
     z = torch.tensor([0.2, -0.4], dtype=torch.float64, requires_grad=True)
 
     weighted_mass = torch.tensor([[1 / 2, 1 / 3], [1 / 3, 5 / 6]], dtype=torch.float64)
-    expected = torch.linalg.solve(vertex_field.mass_matrix, weighted_mass @ z)
+    transform = vertex_field.basis.transform
+    expected = transform.T @ weighted_mass @ transform @ z
     torch.testing.assert_close(callable_field(z), expected, atol=1e-12, rtol=1e-12)
     torch.testing.assert_close(vertex_field(z), expected, atol=1e-12, rtol=1e-12)
 
@@ -69,7 +70,8 @@ def test_cell_coefficient_matches_piecewise_constant_assembly():
         [[0, 0, 0], [0, 1 / 6, 1 / 12], [0, 1 / 12, 1 / 6]],
         dtype=torch.float64,
     )
-    expected = torch.linalg.solve(field.mass_matrix, (left + 2 * right) @ z)
+    transform = field.basis.transform
+    expected = transform.T @ (left + 2 * right) @ transform @ z
     torch.testing.assert_close(field(z), expected, atol=1e-12, rtol=1e-12)
 
 
@@ -77,7 +79,8 @@ def test_vertex_coefficient_interpolates_on_boundary_quadrature():
     field = interval_problem(Coefficient.vertex([2.0, 3.0]), boundary=True)
     z = torch.tensor([0.4, -0.2], dtype=torch.float64)
     boundary_action = torch.diag(torch.tensor([2.0, 3.0], dtype=torch.float64))
-    expected = torch.linalg.solve(field.mass_matrix, boundary_action @ z)
+    transform = field.basis.transform
+    expected = transform.T @ boundary_action @ transform @ z
     torch.testing.assert_close(field(z), expected, atol=1e-12, rtol=1e-12)
 
 
@@ -90,12 +93,13 @@ def test_anisotropic_tensor_coefficient_and_matmul_match_exact_stiffness():
         return -inner(diffusion @ grad(u), grad(v)) * dx
 
     problem = GalerkinProblem(vertices=vertices, simplices=[[0, 1, 2]], weak=weak)
-    basis = PolynomialBasis(2, degree=1)
+    basis = problem.orthonormalize(PolynomialBasis(2, degree=1), quadrature_order=2)
     field = problem.field(basis=basis, quadrature_order=2)
     z = torch.tensor([0.1, -0.3, 0.4], dtype=torch.float64)
     gradients = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=torch.float64)
     stiffness = 0.5 * gradients @ tensor @ gradients.T
-    expected = torch.linalg.solve(field.mass_matrix, -stiffness @ z)
+    transform = basis.transform
+    expected = -transform.T @ stiffness @ transform @ z
     torch.testing.assert_close(field(z), expected, atol=1e-12, rtol=1e-12)
 
 
@@ -112,7 +116,8 @@ def test_nd_tensor_operators_and_pointwise_preserve_batches_and_autograd():
         return (algebraic - 0.1 * tensor_terms) * dx
 
     problem = GalerkinProblem(vertices=vertices, simplices=[[0, 1, 2]], weak=weak)
-    basis = ComponentBasis(PolynomialBasis(2, degree=1), components=2)
+    scalar = problem.basis("polynomial", size=3)
+    basis = ComponentBasis(scalar, components=2)
     field = problem.field(basis=basis, quadrature_order=6)
     z = torch.randn(4, basis.dimension, dtype=torch.float64, requires_grad=True)
     result = field(z)

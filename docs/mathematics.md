@@ -68,14 +68,14 @@ phi_1, ..., phi_N in H,
 V_N = span{phi_1, ..., phi_N}.
 ```
 
-La base contiene toda restricción que defina el espacio admisible. La interfaz central
+La familia contiene toda restricción que defina el espacio admisible. La interfaz central
 no interpreta tipos de condición de frontera. Las condiciones naturales se expresan
 en la forma débil; las restricciones esenciales, periódicas, de simetría o de otra
 clase pueden incorporarse al construir las funciones `phi_i`.
 
-Las bases son fijas. Al preparar el campo, sus valores y derivadas se tabulan y se
-separan del grafo de diferenciación. Autograd actúa sobre los coeficientes de estado,
-no sobre parámetros capturados por la implementación de la base.
+La base operacional es real, fija y ortonormal. Al preparar el campo, sus valores y
+derivadas se tabulan y se separan del grafo de diferenciación. Autograd actúa sobre los
+coeficientes de estado, no sobre parámetros capturados por la implementación de la base.
 
 La síntesis es
 
@@ -84,15 +84,17 @@ Phi: R^N -> V_N,
 Phi z = sum_j z_j phi_j = u_z.
 ```
 
-La matriz de Gram es
+La ortonormalidad respecto del producto interno L2 estándar significa
 
 ```text
-M_ij = (phi_j, phi_i)_H.
+(phi_j, phi_i)_H = delta_ij.
 ```
 
-El programa calcula esta matriz mediante la misma cuadratura del volumen. También
-acepta una matriz simétrica positiva definida suministrada por el usuario para
-representar otro producto interno fijo.
+En consecuencia, `Phi` es una isometría, `norm(Phi z)_H=norm(z)_2`, y la bola funcional
+`V_N` intersección `B_H(0,R)` se identifica exactamente con la bola euclídea
+`B_R` en coordenadas. El programa verifica numéricamente la matriz de Gram y rechaza
+una familia no ortonormal. El producto interno no puede sustituirse después mediante
+una matriz arbitraria.
 
 ## Forma débil y campo reducido
 
@@ -132,10 +134,10 @@ El vector de acciones es
 g_i(z) = a(Phi z; phi_i).
 ```
 
-El campo de Galerkin es la velocidad coordenada única que satisface
+El campo de Galerkin es directamente la velocidad coordenada
 
 ```text
-M G(z) = g(z).
+G(z) = g(z).
 ```
 
 Equivalentemente, la función
@@ -150,8 +152,8 @@ es el representante en `V_N` definido por
 (w_z, v_N)_H = a(Phi z; v_N)       para todo v_N en V_N.
 ```
 
-Si la base es ortonormal, `M=I` y `G_i(z)=a(Phi z;phi_i)`. Si existe una realización
-fuerte `A(Phi z)` en `H`, entonces `w_z` es la proyección de ese campo sobre `V_N`.
+Si existe una realización fuerte `A(Phi z)` en `H`, entonces `w_z` es la proyección de
+ese campo sobre `V_N`.
 
 Una trayectoria de Galerkin satisface
 

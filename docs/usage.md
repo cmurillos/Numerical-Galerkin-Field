@@ -6,7 +6,7 @@ La interfaz central sólo recibe la geometría simplicial y una forma débil com
 
 ```python
 import numpy as np
-from ngfield import FiniteElementBasis, GalerkinProblem, grad, inner, sin
+from ngfield import GalerkinProblem, grad, inner, sin
 
 
 vertices = np.array([[0.0], [0.5], [1.0]])
@@ -18,7 +18,7 @@ def weak(u, v, dx, ds):
 
 
 problem = GalerkinProblem(vertices=vertices, simplices=simplices, weak=weak)
-basis = FiniteElementBasis(problem.geometry, degree=1)
+basis = problem.basis("laplacian", size=8, degree=1)
 G = problem.field(basis=basis)
 ```
 
@@ -169,9 +169,52 @@ diferenciarla espacialmente.
 Las caras interiores están reservadas para un contrato posterior. `ds.interior` falla
 de forma explícita hasta definir trazas, saltos, promedios y orientación.
 
-## Bases suministradas por el usuario
+## Bases ortonormales
 
-Una base implementa:
+La ruta recomendada calcula directamente una base espectral adaptada a la geometría:
+
+```python
+basis = problem.basis("laplacian", size=N, degree=2)
+G = problem.field(basis=basis)
+```
+
+Los modos satisfacen el problema propio discreto
+
+```text
+K c_j = lambda_j M c_j,
+c_i^T M c_j = delta_ij,
+```
+
+y se ordenan por `lambda_j`. La construcción funciona también sobre complejos
+embebidos: en una superficie triangulada usa el Laplace--Beltrami discreto. Cuando la
+geometría tiene frontera y no se ha construido previamente un subespacio restringido,
+el problema espectral auxiliar tiene el comportamiento de frontera natural. No se
+elimina silenciosamente el modo constante.
+
+Las familias disponibles son:
+
+```python
+laplacian = problem.basis("laplacian", size=N, degree=2)
+polynomial = problem.basis("polynomial", size=N)
+fourier = problem.basis("fourier", size=N, periods=periods)
+full_fem = problem.basis("finite-element", degree=2)
+custom = problem.basis("custom", source=raw_basis)
+```
+
+`"laplacian"` es la opción general. `"polynomial"` ordena monomios por grado total y
+los ortonormaliza sobre la geometría. `"fourier"` usa senos y cosenos reales; es natural
+en geometrías periódicas y, si se omite `periods`, infiere escalas de la caja envolvente.
+`"finite-element"` ortonormaliza el espacio nodal completo, cuya dimensión queda fijada
+por malla y grado. `"custom"` ortonormaliza una familia programada por el usuario. Una
+base POD basada en snapshots queda aplazada hasta acordar su contrato de datos.
+
+La base operacional siempre es real, fija y numéricamente ortonormal en
+`L2(Omega_h)`. `problem.field` rechaza una familia cruda y no permite reemplazar el
+producto interno posteriormente con una `mass_matrix` arbitraria.
+
+## Bases personalizadas y subespacios
+
+Una familia candidata personalizada implementa:
 
 ```python
 class MyBasis:
@@ -183,7 +226,7 @@ class MyBasis:
         ...
 ```
 
-El paquete incluye cuatro construcciones:
+El paquete incluye estas construcciones de bajo nivel:
 
 - `CallableBasis`: funciones Python diferenciables; deriva automáticamente con
   `torch.func` o acepta derivadas explícitas.
@@ -191,18 +234,45 @@ El paquete incluye cuatro construcciones:
   dimensión.
 - `FiniteElementBasis`: Lagrange nodal continuo de grado arbitrario sobre simplejos.
 - `ComponentBasis`: copias escalares para campos vectoriales o tensoriales.
+- `ProductBasis`: bases escalares diferentes para las componentes de un producto.
 
-`TransformedBasis` aplica una combinación lineal a cualquier base. Por ejemplo,
-`problem.orthonormalize(basis)` devuelve coordenadas ortonormales numéricamente en L2.
+`TransformedBasis` aplica una combinación lineal a cualquier base. Permite construir
+primero el subespacio admisible y ortonormalizarlo después:
+
+```python
+raw = FiniteElementBasis(problem.geometry, degree=2)
+admissible = TransformedBasis(raw, constraints)
+basis = problem.orthonormalize(admissible)
+G = problem.field(basis=basis)
+```
 
 Las bases son fijas. Sus tablas se congelan al construir `G`; modificar después un
 parámetro capturado por `CallableBasis` no cambia el campo ya preparado. Autograd se
 conserva con respecto a `z`.
 
-Para una base Lagrange se pueden entregar coeficientes
+Para una familia Lagrange se pueden entregar coeficientes
 `[grados_globales,N,*value_shape]`. Sus columnas pueden codificar condiciones de
 frontera, periodicidad, restricciones de divergencia, acoplamiento entre componentes
-o cualquier otro subespacio lineal construido externamente.
+o cualquier otro subespacio lineal construido externamente. Las restricciones deben
+aplicarse antes de la ortonormalización.
+
+Para componentes con cantidades distintas de modos:
+
+```python
+from ngfield import ProductBasis
+
+basis = ProductBasis(
+    [
+        problem.basis("laplacian", size=12),
+        problem.basis("laplacian", size=8),
+        problem.basis("polynomial", size=5),
+    ]
+)
+```
+
+La dimensión total es `12 + 8 + 5` y `value_shape == (3,)`. Los modos se ordenan por
+componente. Si todas usan la misma base, `ComponentBasis(scalar, components=d)` es el
+atajo correspondiente.
 
 ## Significado de G
 
@@ -212,21 +282,22 @@ Para `z` de forma `[N]` o `[B,N]`, la base define
 u_z = sum_j z_j phi_j.
 ```
 
-Si la base no es ortonormal, el campo resuelve
+Como la base operacional es ortonormal,
 
 ```text
-M G(z) = (a(u_z; phi_1), ..., a(u_z; phi_N)),
-M_ij = (phi_j, phi_i)_L2.
+G_i(z) = a(u_z; phi_i),
+norm(u_z)_L2 = norm(z)_2.
 ```
 
-Por ello `G(z)` contiene la velocidad de los coeficientes de `u_z`. El paquete evalúa
-este campo y conserva autograd respecto de `z`; no integra una evolución temporal.
-`mass_matrix` permite suministrar otra matriz de Gram simétrica positiva definida.
+Por ello `G(z)` contiene directamente la velocidad de los coeficientes de `u_z`, y las
+distancias euclídeas en coordenadas son las distancias funcionales L2. El paquete
+evalúa este campo y conserva autograd respecto de `z`; no integra una evolución
+temporal.
 
 ## Campos vectoriales y tensoriales
 
 ```python
-scalar = PolynomialBasis(dimension=p, degree=3)
+scalar = problem.basis("polynomial", size=10)
 basis = ComponentBasis(scalar, components=2)
 
 
@@ -251,18 +322,20 @@ G = problem.field(
 )
 ```
 
-La cuadratura define también la matriz de Gram cuando no se suministra `mass_matrix`.
-Una matriz no positiva definida produce un error: suele indicar dependencia lineal,
-cuadratura insuficiente o una base que no pertenece a la geometría. La evaluación
-divide automáticamente los modos de prueba para respetar `max_intermediate_entries`.
+La cuadratura comprueba que la matriz de Gram sea numéricamente la identidad. Una
+familia no ortonormal produce un error con instrucciones para usar `problem.basis` o
+`problem.orthonormalize`. La evaluación divide automáticamente los modos de prueba
+para respetar `max_intermediate_entries`.
 
 `G.to(device=..., dtype=...)` mueve las tablas, incluidos los `Coefficient` ya
 tabulados. Se admiten `float32` y `float64`.
 
 ## Persistencia
 
-`FiniteElementBasis.save(path)` conserva geometría, regiones, fronteras, numeración y
-coeficientes en NPZ sin pickle. `FiniteElementBasis.load(path)` restaura la misma base. Una
+`FiniteElementBasis.save(path)` conserva geometría, regiones, fronteras, numeración,
+coeficientes, familia espectral, órdenes de cuadratura y valores propios en NPZ sin
+pickle. Esto permite guardar exactamente la base laplaciana usada durante el
+entrenamiento. `FiniteElementBasis.load(path)` restaura sus funciones y orden. Una
 `CallableBasis` contiene código Python y no se serializa como datos ejecutables.
 
 La API 0.1 basada en `Domain`, `FEMSpace`, `Problem` y `GalerkinBasis` se conserva por

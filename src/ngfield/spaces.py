@@ -13,7 +13,7 @@ from .geometry import SimplicialDomain, positive_integer, readonly
 
 
 class Basis(Protocol):
-    """Fixed basis contract; derivatives use ambient Cartesian axes.
+    """Fixed real basis contract; derivatives use ambient Cartesian axes.
 
     evaluate returns [Q,N,*value_shape,*([ambient_dim]*order)]. On embedded
     simplices, the field projects every derivative axis onto the element tangent space.
@@ -82,8 +82,8 @@ class CallableBasis:
 class PolynomialBasis(CallableBasis):
     """Total-degree monomials or explicit exponents in any ambient dimension.
 
-    Monomials are not assumed orthonormal. The field solves their Gram system;
-    orthonormalize() can prepare better-conditioned coordinates. Scaling x is useful.
+    This is a candidate family, not an operational Galerkin basis. Pass it through
+    ``problem.orthonormalize`` before constructing a field. Scaling x is useful.
     """
 
     def __init__(self, dimension, degree=1, *, exponents=None, center=None, scale=None):
@@ -135,14 +135,66 @@ class ComponentBasis:
         self.dimension = scalar_basis.dimension * prod(self.value_shape)
         if hasattr(scalar_basis, "geometry"):
             self.geometry = scalar_basis.geometry
+        for name in ("quadrature_order", "validation_order"):
+            if hasattr(scalar_basis, name):
+                setattr(self, name, getattr(scalar_basis, name))
+        self.family = "component"
 
     def evaluate(self, points, *, order=0, cells=None, barycentric=None):
         a = self.base.evaluate(points, order=order, cells=cells, barycentric=barycentric)
+        a = torch.as_tensor(a, dtype=points.dtype, device=points.device)
         c = prod(self.value_shape)
         eye = torch.eye(c, dtype=points.dtype, device=points.device)
         # [Q,component,mode,value_component,*derivative_axes]
         result = torch.einsum("qn...,ab->qanb...", a, eye)
         return result.reshape(len(points), self.dimension, *self.value_shape, *a.shape[2:])
+
+
+class ProductBasis:
+    """Direct sum of different scalar bases on a common geometry.
+
+    The modes of block ``r`` occupy value component ``r``. Modes are ordered by
+    block and then by their order inside that block. If every block is L2-orthonormal,
+    the product is orthonormal in the standard direct-sum inner product.
+    """
+
+    def __init__(self, bases):
+        self.bases = tuple(bases)
+        if not self.bases:
+            raise ValueError("ProductBasis requires at least one scalar basis.")
+        if any(tuple(getattr(basis, "value_shape", ())) for basis in self.bases):
+            raise ValueError("ProductBasis currently requires scalar component bases.")
+        if any(
+            not isinstance(getattr(basis, "dimension", None), int) or basis.dimension < 1
+            for basis in self.bases
+        ):
+            raise ValueError("Every ProductBasis block needs a positive dimension.")
+        geometries = [basis.geometry for basis in self.bases if hasattr(basis, "geometry")]
+        if geometries and any(not geometries[0].same_mesh(item) for item in geometries[1:]):
+            raise ValueError("ProductBasis blocks belong to different meshes.")
+        if geometries:
+            self.geometry = geometries[0]
+        self.dimension = sum(basis.dimension for basis in self.bases)
+        self.value_shape = (len(self.bases),)
+        offsets = np.cumsum((0, *(basis.dimension for basis in self.bases)))
+        self.slices = tuple(slice(int(a), int(b)) for a, b in zip(offsets[:-1], offsets[1:]))
+        for name in ("quadrature_order", "validation_order"):
+            orders = [getattr(basis, name, None) for basis in self.bases]
+            orders = [order for order in orders if order is not None]
+            if orders:
+                setattr(self, name, max(orders))
+        self.family = "product"
+
+    def evaluate(self, points, *, order=0, cells=None, barycentric=None):
+        values = []
+        for component, basis in enumerate(self.bases):
+            scalar = basis.evaluate(points, order=order, cells=cells, barycentric=barycentric)
+            scalar = torch.as_tensor(scalar, dtype=points.dtype, device=points.device)
+            selector = torch.nn.functional.one_hot(
+                torch.tensor(component, device=points.device), len(self.bases)
+            ).to(points.dtype)
+            values.append(torch.einsum("qn...,c->qnc...", scalar, selector))
+        return torch.cat(values, dim=1)
 
 
 class TransformedBasis:
@@ -161,9 +213,13 @@ class TransformedBasis:
         self.dimension, self.value_shape = int(t.shape[1]), tuple(basis.value_shape)
         if hasattr(basis, "geometry"):
             self.geometry = basis.geometry
+        for name in ("quadrature_order", "validation_order"):
+            if hasattr(basis, name):
+                setattr(self, name, getattr(basis, name))
 
     def evaluate(self, points, *, order=0, cells=None, barycentric=None):
         a = self.base.evaluate(points, order=order, cells=cells, barycentric=barycentric)
+        a = torch.as_tensor(a, dtype=points.dtype, device=points.device)
         return torch.einsum("qi...,ij->qj...", a, self.transform.to(points))
 
 
@@ -227,7 +283,8 @@ class FiniteElementBasis:
             values.append(value)
         return torch.stack(values)
 
-    def evaluate(self, points, *, order=0, cells=None, barycentric=None):
+    def local_evaluate(self, points, *, order=0, cells=None, barycentric=None):
+        """Evaluate only the element-local shape functions at each supplied point."""
         if cells is None or barycentric is None:
             raise ValueError(
                 "FiniteElementBasis requires parent cells and barycentric coordinates."
@@ -243,6 +300,10 @@ class FiniteElementBasis:
                 args.extend([inverse, [0, 2 + i, 2 + order + i]])
             args.append([0, 1, *range(2 + order, 2 + 2 * order)])
             local = torch.einsum(*args)
+        return local
+
+    def evaluate(self, points, *, order=0, cells=None, barycentric=None):
+        local = self.local_evaluate(points, order=order, cells=cells, barycentric=barycentric)
         dofs = torch.tensor(self.element_dofs.copy(), device=points.device)[cells]
         if self.coefficients is None:
             c = torch.nn.functional.one_hot(dofs, self.dimension).to(points.dtype).unsqueeze(-1)
@@ -263,10 +324,13 @@ class FiniteElementBasis:
             "metadata": np.array(
                 json.dumps(
                     {
-                        "schema": 2,
+                        "schema": 3,
                         "degree": self.degree,
                         "boundaries": names,
                         "regions": regions,
+                        "family": getattr(self, "family", "finite-element"),
+                        "quadrature_order": getattr(self, "quadrature_order", None),
+                        "validation_order": getattr(self, "validation_order", None),
                     }
                 )
             ),
@@ -276,6 +340,8 @@ class FiniteElementBasis:
         }
         if self.coefficients is not None:
             arrays["coefficients"] = self.coefficients
+        if hasattr(self, "eigenvalues"):
+            arrays["eigenvalues"] = self.eigenvalues
         for i, name in enumerate(names):
             arrays[f"boundary_{i}"] = self.geometry.exterior_faces[self.geometry.boundaries[name]]
         for i, name in enumerate(regions):
@@ -287,7 +353,7 @@ class FiniteElementBasis:
     def load(cls, path):
         with np.load(path, allow_pickle=False) as data:
             metadata = json.loads(str(data["metadata"]))
-            if metadata["schema"] not in (1, 2):
+            if metadata["schema"] not in (1, 2, 3):
                 raise ValueError("Unsupported finite-element basis schema.")
             regions = (
                 {name: data[f"region_{i}"] for i, name in enumerate(metadata.get("regions", []))}
@@ -308,4 +374,14 @@ class FiniteElementBasis:
             )
             if not np.array_equal(result.element_dofs, data["element_dofs"]):
                 raise ValueError("Stored and reconstructed DOF numbering differ.")
+            if metadata["schema"] >= 3:
+                result.family = metadata.get("family", "finite-element")
+                for name in ("quadrature_order", "validation_order"):
+                    if metadata.get(name) is not None:
+                        setattr(result, name, int(metadata[name]))
+                if "eigenvalues" in data:
+                    values = np.asarray(data["eigenvalues"])
+                    if values.shape != (result.dimension,) or not np.isfinite(values).all():
+                        raise ValueError("Stored eigenvalues are invalid.")
+                    result.eigenvalues = readonly(values)
             return result

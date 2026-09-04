@@ -309,3 +309,169 @@ La implementación debe verificar al menos:
 6. no linealidades `pointwise` diferenciables respecto de `z`;
 7. rechazo de toda forma que no sea exactamente lineal en `v`;
 8. rechazo explícito de caras interiores hasta acordar su contrato.
+
+## D-005 — Contrato de bases ortonormales
+
+**Estado:** aceptada.
+
+### Base matemática y coordenadas
+
+Una familia candidata es una lista real, finita y ordenada
+
+```text
+B = (phi_1, ..., phi_N),
+phi_j: Omega_h -> R^(s_1 x ... x s_r).
+```
+
+`dimension=N` y `value_shape=(s_1,...,s_r)` forman parte de su identidad. El índice no
+se reordena al construir un campo: `z_j` es siempre el coeficiente de `phi_j`. Para
+campos escalares `value_shape=()`.
+
+La misma familia se usa para reconstruir el estado y para probar la forma débil. Una
+elección distinta de espacios de prueba y estado sería Petrov--Galerkin y requiere un
+contrato posterior.
+
+La base operacional que recibe `problem.field` debe satisfacer
+
+```text
+<phi_i, phi_j>_L2 = delta_ij.
+```
+
+El producto interno de valores es el producto euclídeo o de Frobenius estándar. Por
+ello la síntesis `Phi_N z=sum_j z_j phi_j` es una isometría, `norm(Phi_N z)_L2=norm(z)_2`
+y `Phi_N(B_R)=V_N` intersección `B_L2(0,R)`. No se admite una `mass_matrix` posterior
+que cambie esta métrica.
+
+Las bases son reales para conservar `G:R^N->R^N`. Fourier se representa mediante
+senos y cosenos reales. El soporte complejo modificaría el producto interno y se deja
+para otro contrato.
+
+### Protocolo mínimo
+
+Una familia candidata no necesita heredar de una clase concreta. Debe proporcionar:
+
+```python
+class MyBasis:
+    dimension = N
+    value_shape = ()
+
+    def evaluate(self, points, *, order=0, cells=None, barycentric=None): ...
+```
+
+Para `points` de forma `[Q,p]`, el resultado tiene forma
+
+```text
+[Q,N,*value_shape,*([p]*order)].
+```
+
+`cells[q]` identifica el simplex padre y `barycentric[q]` sus coordenadas
+baricéntricas. Una base global puede ignorarlos; una base local o discontinua puede
+usarlos. Sólo se solicitan los órdenes derivativos presentes en `weak`. Las derivadas
+se expresan en coordenadas ambientes y se proyectan tangencialmente según D-003.
+
+Al construir `G`, todas las tablas se separan del grafo de autograd. La base no depende
+del estado ni del tiempo y no es entrenable.
+
+### Construcción desde la geometría
+
+La ruta canónica es
+
+```python
+basis = problem.basis("laplacian", size=N, degree=q)
+G = problem.field(basis=basis)
+```
+
+Para una familia Lagrange `psi_a`, se ensamblan
+
+```text
+M_ab = integral_Omega_h psi_a psi_b,
+K_ab = integral_Omega_h <grad psi_a, grad psi_b>,
+```
+
+y se resuelve
+
+```text
+K c_j = lambda_j M c_j,
+c_i^T M c_j = delta_ij.
+```
+
+Los modos `phi_j=sum_a (c_j)_a psi_a` se ordenan por valor propio creciente. En un
+complejo embebido, `K` usa el gradiente tangencial y representa el Laplace--Beltrami
+discreto. Si existe frontera y no se construyó previamente un subespacio restringido,
+el problema auxiliar conserva su condición natural. Los modos nulos, incluida la
+constante cuando corresponde, no se eliminan silenciosamente.
+
+La orientación de signo se fija haciendo positiva la entrada de mayor magnitud de
+cada vector propio. Un espacio propio múltiple aún admite rotaciones ortogonales; por
+eso la base numérica concreta se guarda y reutiliza, en lugar de regenerarse para el
+entrenamiento.
+
+### Familias públicas
+
+`problem.basis` ofrece:
+
+```text
+laplacian       modos geométricos ordenados; opción general predeterminada;
+polynomial      monomios por grado total, restringidos y ortonormalizados;
+fourier         senos y cosenos reales, restringidos y ortonormalizados;
+finite-element  espacio Lagrange completo ortonormalizado;
+custom          una familia suministrada por el usuario y ortonormalizada.
+```
+
+Una futura base POD basada en snapshots queda fuera de D-005 hasta acordar el contrato
+de esos datos.
+
+`ComponentBasis` repite una base escalar en todas las componentes. `ProductBasis`
+combina bases escalares distintas, posiblemente con cantidades de modos diferentes,
+en el producto directo. Los modos se ordenan primero por componente y luego dentro de
+cada base. `TransformedBasis` aplica `phi_new[j]=sum_i phi_old[i] C[i,j]` y permite
+codificar cualquier subespacio lineal; las restricciones se aplican antes de la
+ortonormalización.
+
+### Ortonormalización y validación
+
+Una familia cruda se prepara explícitamente:
+
+```python
+admissible = TransformedBasis(raw_basis, constraints)
+basis = problem.orthonormalize(admissible)
+```
+
+Si `M=L L^T`, se usa la transformación `L^(-T)`. La operación devuelve un objeto nuevo
+y nunca cambia silenciosamente las coordenadas de una base existente.
+
+La construcción y la validación pueden usar órdenes de cuadratura distintos. Se
+registra
+
+```text
+orthonormality_error = max_ij |M_ij-delta_ij|,
+```
+
+y se rechaza la base si supera la tolerancia. `problem.field` repite la comprobación
+con su propia cuadratura. Una base preparada recomienda el orden con el que debe
+evaluarse cuando el usuario no lo especifica.
+
+La representación densa de tablas es un detalle de la implementación actual, no una
+parte permanente del contrato; se podrá reemplazar por almacenamiento local o disperso
+sin cambiar la interfaz matemática.
+
+### Persistencia
+
+Una base espectral de elementos finitos guarda sin `pickle` la geometría, numeración,
+coeficientes, orden, familia, órdenes de cuadratura y valores propios. Cargarla restaura
+las mismas funciones coordenadas. Una familia basada en código Python no se serializa
+automáticamente como código ejecutable.
+
+## Criterios de aceptación de D-005
+
+La implementación debe verificar al menos:
+
+1. base laplaciana ortonormal en una geometría ND;
+2. base laplaciana sobre una superficie cerrada embebida en `R3`;
+3. orden creciente de valores propios y conservación del modo nulo;
+4. familias polinómica, Fourier, de elementos finitos y personalizada;
+5. productos con cantidades distintas de modos por componente;
+6. rechazo de una familia operacional no ortonormal;
+7. detección de una falsa ortonormalidad producida por subintegración;
+8. persistencia exacta de los modos laplacianos y sus metadatos;
+9. igualdad `G_i(z)=a(Phi_N z;phi_i)` sin una corrección de masa posterior.

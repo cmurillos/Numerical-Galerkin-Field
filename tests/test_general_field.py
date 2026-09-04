@@ -29,16 +29,18 @@ def test_p1_diffusion_matches_exact_matrices_in_nd(dimension):
         return -0.1 * inner(grad(u), grad(v)) * dx
 
     problem = GalerkinProblem(vertices=vertices, simplices=cells, weak=weak)
-    basis = FiniteElementBasis(problem.geometry)
+    raw_basis = FiniteElementBasis(problem.geometry)
+    basis = problem.orthonormalize(raw_basis, quadrature_order=2)
     field = problem.field(basis=basis, quadrature_order=2)
     volume = 1 / math.factorial(dimension)
-    mass = np.full((dimension + 1, dimension + 1), volume / ((dimension + 1) * (dimension + 2)))
-    mass[np.diag_indices_from(mass)] *= 2
     gradients = np.vstack((-np.ones(dimension), np.eye(dimension)))
     stiffness = volume * gradients @ gradients.T
     z = torch.linspace(-0.3, 0.4, dimension + 1, dtype=field.dtype, requires_grad=True)
-    expected = np.linalg.solve(mass, -0.1 * stiffness @ z.detach().numpy())
-    torch.testing.assert_close(field(z), torch.tensor(expected), rtol=1e-11, atol=1e-11)
+    transform = basis.transform.numpy()
+    expected = -0.1 * transform.T @ stiffness @ transform @ z.detach().numpy()
+    torch.testing.assert_close(
+        field(z), torch.tensor(expected, dtype=field.dtype), rtol=1e-11, atol=1e-11
+    )
     field(z).square().sum().backward()
     assert torch.isfinite(z.grad).all()
 
@@ -54,7 +56,8 @@ def test_complete_form_contains_volume_boundary_coordinates_and_normal():
         return diffusion + robin
 
     problem = GalerkinProblem(vertices=vertices, simplices=cells, boundaries=boundaries, weak=weak)
-    field = problem.field(basis=FiniteElementBasis(problem.geometry), quadrature_order=6)
+    basis = problem.basis("laplacian", size=3)
+    field = problem.field(basis=basis, quadrature_order=6)
     z = torch.tensor([0.2, -0.1, 0.3], dtype=field.dtype)
     assert field(z).shape == z.shape
     assert torch.isfinite(field(z)).all()
@@ -70,7 +73,7 @@ def test_nonlinear_vector_field_and_batches():
         return reaction * dx - 0.1 * inner(grad(u), grad(v)) * dx
 
     problem = GalerkinProblem(vertices=vertices, simplices=cells, weak=weak)
-    scalar = PolynomialBasis(2, degree=1)
+    scalar = problem.basis("polynomial", size=3)
     basis = ComponentBasis(scalar, components=2)
     field = problem.field(basis=basis, quadrature_order=6)
     z = torch.randn(7, basis.dimension, dtype=field.dtype, requires_grad=True)
@@ -83,12 +86,13 @@ def test_callable_basis_derivatives_are_automatic():
     def values(x):
         return torch.stack((torch.ones_like(x[:, 0]), torch.exp(x[:, 0])), dim=1)
 
-    basis = CallableBasis(values, dimension=2)
+    raw_basis = CallableBasis(values, dimension=2)
 
     def weak(u, v, dx, ds):
         return -inner(grad(u), grad(v)) * dx
 
     problem = GalerkinProblem(vertices=[[0.0], [1.0]], simplices=[[0, 1]], weak=weak)
+    basis = problem.basis("custom", source=raw_basis, quadrature_order=8)
     field = problem.field(basis=basis, quadrature_order=8)
     assert torch.isfinite(field(torch.tensor([0.1, -0.2], dtype=field.dtype))).all()
 
@@ -110,13 +114,16 @@ def test_callable_derivatives_are_projected_tangentially_and_basis_is_fixed():
         return -inner(grad(u), grad(v)) * dx
 
     problem = GalerkinProblem(vertices=vertices, simplices=[[0, 1, 2]], weak=weak)
-    flat = problem.field(basis=make_basis(0.0))
-    extended = problem.field(basis=make_basis(7.0))
+    flat_basis = problem.orthonormalize(make_basis(0.0), quadrature_order=4)
+    extended_basis = problem.orthonormalize(make_basis(7.0), quadrature_order=4)
+    flat = problem.field(basis=flat_basis)
+    extended = problem.field(basis=extended_basis)
     z = torch.tensor([0.2, -0.3], dtype=flat.dtype, requires_grad=True)
     torch.testing.assert_close(flat(z), extended(z), atol=1e-12, rtol=1e-12)
 
     parameter = torch.tensor(2.0, dtype=torch.float64, requires_grad=True)
-    frozen = problem.field(basis=make_basis(4.0, parameter))
+    frozen_basis = problem.orthonormalize(make_basis(4.0, parameter), quadrature_order=4)
+    frozen = problem.field(basis=frozen_basis)
     before = frozen(z)
     with torch.no_grad():
         parameter.fill_(3.0)
@@ -138,12 +145,14 @@ def test_reusable_geometry_and_labeled_volume_measures():
     problem = GalerkinProblem(geometry=geometry, weak=weak)
     assert problem.geometry is geometry
     assert set(problem.regions) == {"all", "left", "right"}
-    basis = FiniteElementBasis(geometry)
+    raw_basis = FiniteElementBasis(geometry)
+    basis = problem.orthonormalize(raw_basis, quadrature_order=2)
     field = problem.field(basis=basis, quadrature_order=2)
     z = torch.tensor([0.2, -0.1, 0.4], dtype=field.dtype)
     left = torch.tensor([[1 / 6, 1 / 12, 0], [1 / 12, 1 / 6, 0], [0, 0, 0]], dtype=field.dtype)
     right = torch.tensor([[0, 0, 0], [0, 1 / 6, 1 / 12], [0, 1 / 12, 1 / 6]], dtype=field.dtype)
-    expected = torch.linalg.solve(field.mass_matrix, (left + 2 * right) @ z)
+    transform = basis.transform
+    expected = transform.T @ (left + 2 * right) @ transform @ z
     torch.testing.assert_close(field(z), expected, atol=1e-12, rtol=1e-12)
 
     with pytest.raises(ValueError, match="cannot be combined"):
@@ -180,20 +189,19 @@ def test_numerical_orthonormalization_preserves_physical_functions():
     torch.testing.assert_close(field(z), z, atol=1e-10, rtol=0)
 
 
-def test_custom_mass_matrix_changes_coordinate_velocity():
+def test_field_rejects_nonorthonormal_basis_and_custom_mass_matrix():
     vertices, cells = unit_simplex(1)
 
     def weak(u, v, dx, ds):
         return u * v * dx
 
     problem = GalerkinProblem(vertices=vertices, simplices=cells, weak=weak)
-    basis = PolynomialBasis(1, degree=1)
-    mass = torch.tensor([[2.0, 0.0], [0.0, 3.0]], dtype=torch.float64)
-    field = problem.field(basis=basis, mass_matrix=mass)
-    z = torch.tensor([0.4, -0.7], dtype=field.dtype)
-    gram = torch.tensor([[1.0, 0.5], [0.5, 1 / 3]], dtype=field.dtype)
-    expected = torch.linalg.solve(mass, gram @ z)
-    torch.testing.assert_close(field(z), expected, rtol=1e-12, atol=1e-12)
+    raw_basis = PolynomialBasis(1, degree=1)
+    with pytest.raises(ValueError, match="must be L2-orthonormal"):
+        problem.field(basis=raw_basis)
+    basis = problem.orthonormalize(raw_basis)
+    with pytest.raises(TypeError, match="mass_matrix"):
+        problem.field(basis=basis, mass_matrix=torch.eye(2))
 
 
 def test_form_rejects_nonlinearity_in_test_function_and_unknown_boundary():

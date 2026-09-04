@@ -5,7 +5,7 @@ import json
 import numpy as np
 import torch
 
-from ngfield import FiniteElementBasis, GalerkinProblem, grad, inner
+from ngfield import GalerkinProblem, grad, inner
 
 
 def weak(u, v, dx, ds):
@@ -22,7 +22,7 @@ def main():
         boundaries=boundaries,
         weak=weak,
     )
-    basis = FiniteElementBasis(problem.geometry, degree=1)
+    basis = problem.basis("laplacian", size=5, degree=1)
     field = problem.field(basis=basis, quadrature_order=4)
     z = torch.linspace(-0.2, 0.2, basis.dimension, dtype=field.dtype)
     result = field(z)
