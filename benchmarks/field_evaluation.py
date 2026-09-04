@@ -43,8 +43,7 @@ def main():
     geometry_seconds = time.perf_counter() - start
     results = []
     for modes in args.modes:
-        coefficients = np.sin(np.pi * vertices * np.arange(1, modes + 1)[None, :])
-        basis = FiniteElementBasis(problem.geometry, coefficients=coefficients)
+        basis = problem.basis("laplacian", size=modes, degree=1)
         synchronize(device)
         start = time.perf_counter()
         field = problem.field(basis=basis, quadrature_order=args.quadrature_order, device=device)
