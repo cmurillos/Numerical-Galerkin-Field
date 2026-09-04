@@ -48,6 +48,7 @@ jobs:
         run: |
           python examples/general_problem.py
           python examples/embedded_torus.py
+          python examples/heterogeneous_coefficient.py
           python examples/diffusion.py
           python examples/reaction_diffusion.py
       - name: Exercise benchmark and build distribution

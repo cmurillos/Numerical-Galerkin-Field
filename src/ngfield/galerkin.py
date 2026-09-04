@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import torch
 
-from .forms import build_form, derivative_orders, evaluate
+from .forms import build_form, coefficient_expressions, derivative_orders, evaluate
 from .geometry import SimplicialDomain, positive_integer
 from .spaces import TransformedBasis
 
@@ -17,6 +17,7 @@ class _Table:
     barycentric: torch.Tensor
     normals: torch.Tensor | None
     basis: dict[int, torch.Tensor]
+    coefficients: dict[object, torch.Tensor]
 
     def to(self, device, dtype):
         for name in ("points", "weights", "barycentric", "normals"):
@@ -27,12 +28,17 @@ class _Table:
         self.basis = {
             order: values.to(device=device, dtype=dtype) for order, values in self.basis.items()
         }
+        self.coefficients = {
+            coefficient: values.to(device=device, dtype=dtype)
+            for coefficient, values in self.coefficients.items()
+        }
 
 
 def _table(
     geometry,
     basis,
     orders,
+    coefficients,
     quadrature_order,
     boundary,
     region,
@@ -74,6 +80,10 @@ def _table(
         if not torch.isfinite(values).all():
             raise ValueError("Basis evaluation returned nonfinite values.")
         tables[order] = values.detach()
+    coefficient_tables = {
+        coefficient: coefficient.tabulate(geometry, points, cells, barycentric)
+        for coefficient in coefficients
+    }
     return _Table(
         points,
         torch.tensor(q.weights.copy(), dtype=dtype, device=device),
@@ -81,6 +91,7 @@ def _table(
         barycentric,
         None if q.normals is None else torch.tensor(q.normals.copy(), dtype=dtype, device=device),
         tables,
+        coefficient_tables,
     )
 
 
@@ -178,6 +189,7 @@ class GalerkinProblem:
             self.geometry,
             basis,
             {0},
+            set(),
             quadrature_order,
             None,
             None,
@@ -229,6 +241,7 @@ class GalerkinField:
         self.dimension, self.value_shape = basis.dimension, value_shape
         self.form = build_form(problem.weak, value_shape, problem.geometry.ambient_dimension)
         required = derivative_orders(self.form)
+        coefficients = coefficient_expressions(self.form)
         volume_orders = {"all": {0}}
         for name, orders in required["volume"].items():
             volume_orders.setdefault(name, set()).update(orders)
@@ -237,6 +250,7 @@ class GalerkinField:
                 problem.geometry,
                 basis,
                 orders,
+                coefficients["volume"].get(name, set()),
                 quadrature_order,
                 None,
                 None if name == "all" else name,
@@ -253,6 +267,7 @@ class GalerkinField:
                 problem.geometry,
                 basis,
                 orders,
+                coefficients["boundary"].get(name, set()),
                 quadrature_order,
                 name,
                 None,
@@ -299,6 +314,7 @@ class GalerkinField:
         for table in (*self._volumes.values(), *self._boundary.values()):
             tensors.extend((table.points, table.weights, table.cells, table.barycentric))
             tensors.extend(table.basis.values())
+            tensors.extend(table.coefficients.values())
             if table.normals is not None:
                 tensors.append(table.normals)
         return sum(tensor.numel() * tensor.element_size() for tensor in tensors)
@@ -349,6 +365,7 @@ class GalerkinField:
                 "z": z,
                 "test": test,
                 "basis": table.basis.__getitem__,
+                "coefficient": table.coefficients.__getitem__,
                 "points": table.points,
                 "normals": table.normals,
                 "dtype": self.dtype,

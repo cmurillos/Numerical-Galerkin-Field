@@ -215,3 +215,97 @@ La implementación debe verificar al menos:
 6. invariancia del gradiente tangencial frente a extensiones ambientales;
 7. equivalencia entre la entrada directa y `geometry=...`;
 8. persistencia de regiones y fronteras en bases de elementos finitos.
+
+## D-004 — Lenguaje de formas débiles y coeficientes fijos
+
+**Estado:** aceptada.
+
+### Una sola forma débil
+
+El usuario describe la aplicación completa
+
+```text
+a(u;v) = suma de integrales de volumen y de frontera
+```
+
+mediante una sola función:
+
+```python
+def weak(u, v, dx, ds):
+    return ...
+```
+
+`u` es el estado reconstruido y puede aparecer de forma no lineal. Cada integrando
+no nulo debe depender exactamente de forma lineal de `v`. La biblioteca rechaza
+integrandos independientes de `v` y dependencias cuadráticas, no lineales o en
+denominadores que contengan `v`.
+
+`dx`, `dx("region")`, `ds` y `ds("boundary")` sólo seleccionan medidas. No introducen
+tipos de condición de frontera. `dx.x` proporciona el punto físico y `ds.normal` la
+conormal exterior definida en D-003.
+
+### Coeficientes espaciales
+
+`Coefficient` representa un campo espacial fijo que forma parte del operador. En la
+primera versión se admiten exactamente tres fuentes:
+
+```python
+Coefficient(function, shape=value_shape)
+Coefficient.cell(values)  # [numero_de_simplices, *value_shape]
+Coefficient.vertex(values)  # [numero_de_vertices, *value_shape]
+```
+
+La función recibe puntos físicos `[Q,p]` y devuelve `[Q,*value_shape]`. Los valores por
+simplex se interpretan como constantes a trozos. Los valores por vértice se interpolan
+linealmente mediante coordenadas baricéntricas, también sobre caras de frontera.
+
+Todos estos coeficientes son autónomos, no entrenables y no variables en el tiempo.
+Se copian o evalúan al construir `G`, se separan del grafo de autograd y después se
+mueven con `G.to(...)`. Cambiar la función, sus parámetros capturados o los datos de
+origen no modifica un campo ya construido.
+
+No se aceptan inicialmente valores crudos por punto de cuadratura. Esos datos estarían
+ligados a una regla, orden y enumeración internos y no definirían por sí solos un campo
+geométrico reutilizable.
+
+### Operadores ND
+
+El lenguaje incluye aritmética e indexación, `grad`, `inner`, `contract`, `dot`,
+`outer`, `transpose`, `trace`, `div`, `sym_grad` y `stack`. Todos operan sobre los ejes
+físicos sin contraer los ejes internos de lote, función de prueba o cuadratura.
+
+`inner(a,b)` contrae todos los ejes físicos de igual forma. `a @ b` equivale a
+`contract(a,b,axes=1)`. `contract` admite un número de ejes finales/iniciales o dos
+listas explícitas de ejes. `transpose` intercambia los dos últimos ejes, `trace` los
+contrae, `div` requiere que el último eje tenga tamaño `p`, y `sym_grad` requiere un
+campo vectorial de forma `(p,)`.
+
+`pointwise(function, *values, shape=...)` permite una operación PyTorch vectorizada no
+lineal. Sus argumentos pueden depender de `u`, de coordenadas y de coeficientes, pero
+no de `v`. El usuario declara la forma física de la salida. La función se evalúa al
+evaluar `G`, por lo que autograd respecto de los coeficientes de estado `z` se conserva.
+
+Las derivadas espaciales de `u`, `v`, coordenadas y expresiones algebraicas se obtienen
+componiendo `grad`. D-004 no intenta diferenciar espacialmente una función externa de
+`Coefficient` ni una caja negra `pointwise`; esas derivadas deben suministrarse como
+expresiones o coeficientes separados.
+
+### Caras interiores
+
+Las caras interiores no se activan en D-004. La expresión reservada `ds.interior`
+produce un error explícito hasta definir un contrato independiente para trazas de ambos
+lados, saltos, promedios y orientación. Las integrales de frontera exterior sí forman
+parte de D-004.
+
+## Criterios de aceptación de D-004
+
+La implementación debe verificar al menos:
+
+1. coeficientes escalares y tensoriales definidos por función;
+2. coeficientes constantes por simplex e interpolados por vértice;
+3. tabulación fija sin gradientes hacia los datos externos;
+4. uso de coeficientes tanto en `dx` como en `ds`;
+5. operadores tensoriales ND y contracciones que preserven lotes;
+6. no linealidades `pointwise` diferenciables respecto de `z`;
+7. rechazo de toda forma que no sea exactamente lineal en `v`;
+8. rechazo explícito de caras interiores hasta acordar su contrato.

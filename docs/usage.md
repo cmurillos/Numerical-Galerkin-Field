@@ -108,10 +108,66 @@ En un complejo embebido, `grad` es siempre el gradiente tangencial expresado en 
 coordenadas ambientes. El paquete proyecta las derivadas de una base programable; el
 usuario no debe hacerlo manualmente.
 
-Se proporcionan `grad`, `inner`, `stack`, `sin`, `cos`, `exp`, `log`, `sqrt` y `tanh`,
-además de aritmética, potencias escalares e indexación. `grad` puede componerse para
-solicitar derivadas superiores de la base. La conformidad Sobolev necesaria para una
-forma concreta sigue siendo una propiedad de la base elegida.
+Se proporcionan `grad`, `inner`, `contract`, `dot`, `outer`, `transpose`, `trace`,
+`div`, `sym_grad`, `stack`, `sin`, `cos`, `exp`, `log`, `sqrt` y `tanh`, además de
+aritmética, `@`, potencias escalares e indexación. `grad` puede componerse para solicitar
+derivadas superiores de la base. La conformidad Sobolev necesaria para una forma
+concreta sigue siendo una propiedad de la base elegida.
+
+## Coeficientes espaciales fijos
+
+Los datos del operador se expresan con `Coefficient`. Se puede elegir la representación
+que resulte natural para cada campo:
+
+```python
+from ngfield import Coefficient
+
+# f(x), evaluada una sola vez al construir G
+k_function = Coefficient(lambda x: 1.0 + x[:, 0] ** 2, shape=())
+
+# una constante por simplex
+k_cell = Coefficient.cell([1.0, 1.0, 4.0, 4.0])
+
+# un valor por vértice, interpolado linealmente
+k_vertex = Coefficient.vertex(vertex_values)
+```
+
+Las formas físicas también pueden ser vectoriales o tensoriales. Por ejemplo, una
+difusión anisótropa en un ambiente de dimensión `p` se escribe:
+
+```python
+K = Coefficient(lambda x: diffusion_tensor(x), shape=(p, p))
+
+
+def weak(u, v, dx, ds):
+    return -inner(K @ grad(u), grad(v)) * dx
+```
+
+La función de un `Coefficient` recibe todos los puntos como tensor `[Q,p]` y debe
+devolver `[Q,*shape]`. Los coeficientes quedan fijos al construir `G`: no dependen del
+tiempo, no son parámetros entrenables y modificarlos después exige construir otro
+campo. No existe una entrada de datos crudos por punto de cuadratura.
+
+Para una no linealidad vectorizada que sí debe evaluarse con cada estado se usa
+`pointwise`:
+
+```python
+from ngfield import pointwise
+
+
+def weak(u, v, dx, ds):
+    reaction = pointwise(lambda y: y - y**3, u, shape=u.shape)
+    return inner(reaction, v) * dx
+```
+
+Los argumentos de `pointwise` no pueden contener `v`; así la forma continúa siendo
+lineal en la función de prueba. La función debe usar operaciones PyTorch vectorizadas y
+preserva autograd respecto de `z`. Si se necesita `grad` de un coeficiente externo o de
+una caja negra `pointwise`, su derivada se expresa por separado: el núcleo no intenta
+diferenciarla espacialmente.
+
+Las caras interiores están reservadas para un contrato posterior. `ds.interior` falla
+de forma explícita hasta definir trazas, saltos, promedios y orientación.
 
 ## Bases suministradas por el usuario
 
@@ -200,8 +256,8 @@ Una matriz no positiva definida produce un error: suele indicar dependencia line
 cuadratura insuficiente o una base que no pertenece a la geometría. La evaluación
 divide automáticamente los modos de prueba para respetar `max_intermediate_entries`.
 
-`G.to(device=..., dtype=...)` mueve las tablas. Los tensores externos capturados por
-la forma son responsabilidad del usuario. Se admiten `float32` y `float64`.
+`G.to(device=..., dtype=...)` mueve las tablas, incluidos los `Coefficient` ya
+tabulados. Se admiten `float32` y `float64`.
 
 ## Persistencia
 

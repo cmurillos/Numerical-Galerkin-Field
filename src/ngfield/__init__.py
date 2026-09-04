@@ -4,7 +4,26 @@ from .basis import GalerkinBasis
 from .domain import Domain
 from .fem import FEMSpace
 from .field import GalerkinField as LegacyGalerkinField
-from .forms import cos, exp, grad, inner, log, sin, sqrt, stack, tanh
+from .forms import (
+    Coefficient,
+    contract,
+    cos,
+    div,
+    dot,
+    exp,
+    grad,
+    inner,
+    log,
+    outer,
+    pointwise,
+    sin,
+    sqrt,
+    stack,
+    sym_grad,
+    tanh,
+    trace,
+    transpose,
+)
 from .galerkin import GalerkinField as GeneralGalerkinField
 from .galerkin import GalerkinProblem
 from .geometry import SimplicialDomain
@@ -23,6 +42,7 @@ __version__ = "0.2.0"
 __all__ = [
     "Basis",
     "CallableBasis",
+    "Coefficient",
     "ComponentBasis",
     "Domain",
     "FEMSpace",
@@ -36,17 +56,25 @@ __all__ = [
     "LegacyGalerkinField",
     "SimplicialDomain",
     "TransformedBasis",
+    "contract",
     "cos",
+    "div",
+    "dot",
     "exp",
     "grad",
     "inner",
     "load_basis",
     "log",
+    "outer",
+    "pointwise",
     "save_basis",
     "sin",
     "sqrt",
     "stack",
+    "sym_grad",
     "tanh",
+    "trace",
+    "transpose",
 ]
 
 

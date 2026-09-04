@@ -114,6 +114,18 @@ a(u;v)
 Las integrales pueden restringirse a regiones y fronteras nombradas sin introducir
 tipos especiales de condición de frontera.
 
+Los coeficientes espaciales fijos que aparecen en los integrandos pueden ser campos
+escalares, vectoriales o tensoriales. Se definen mediante una función de `x`, valores
+constantes por simplex o valores nodales con interpolación baricéntrica P1. Su
+tabulación se realiza una sola vez al construir el campo, de modo que forman parte del
+operador fijo y no del estado dinámico. En particular, ni estos valores ni parámetros
+capturados por su función reciben gradientes.
+
+Las operaciones no lineales de punto se aplican a expresiones independientes de `v`.
+Se evalúan de nuevo para cada `z` y conservan la diferenciación automática respecto de
+ese estado. Cada integrando completo debe ser exactamente de grado uno en `v`; no se
+admiten términos afines independientes de la función de prueba.
+
 El vector de acciones es
 
 ```text
@@ -150,6 +162,10 @@ u_N(t) = Phi z(t).
 
 La biblioteca construye y evalúa `G`; la integración de esta EDO es una operación
 posterior e independiente.
+
+Este contrato sólo integra en los elementos máximos y en la frontera exterior. Las
+caras interiores requieren distinguir las dos trazas incidentes y fijar convenciones
+de salto, promedio y orientación; se mantienen reservadas hasta definir ese contrato.
 
 ## Cuadratura en dimensión arbitraria
 

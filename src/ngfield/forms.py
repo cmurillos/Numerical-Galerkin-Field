@@ -99,6 +99,12 @@ class Expr:
     def __rtruediv__(self, other):
         return as_expr(other, self.spatial_dimension).__truediv__(self)
 
+    def __matmul__(self, other):
+        return contract(self, other, axes=1)
+
+    def __rmatmul__(self, other):
+        return contract(other, self, axes=1)
+
     def __pow__(self, power):
         if not isinstance(power, (int, float)) or isinstance(power, bool):
             raise TypeError("Powers in weak forms currently require a real scalar exponent.")
@@ -133,6 +139,10 @@ class Expr:
             data=(item, len(self.shape)),
             degrees=self.test_degrees,
         )
+
+    @property
+    def T(self):
+        return transpose(self)
 
     def diff(self, axis):
         if self.spatial_dimension is None:
@@ -180,9 +190,109 @@ class Expr:
             return inner(self.args[0].diff(axis), self.args[1]) + inner(
                 self.args[0], self.args[1].diff(axis)
             )
+        if self.op == "contract":
+            a, b = self.args
+            return contract(a.diff(axis), b, axes=self.data) + contract(
+                a, b.diff(axis), axes=self.data
+            )
+        if self.op == "outer":
+            a, b = self.args
+            return outer(a.diff(axis), b) + outer(a, b.diff(axis))
+        if self.op == "transpose":
+            return transpose(self.args[0].diff(axis))
+        if self.op == "trace":
+            return trace(self.args[0].diff(axis))
+        if self.op == "coefficient":
+            raise NotImplementedError(
+                "Spatial derivatives of external coefficients are not part of D-004."
+            )
+        if self.op == "pointwise":
+            raise NotImplementedError(
+                "Differentiate the pointwise expression explicitly before using grad."
+            )
         if self.op in _UNARY_DERIVATIVES:
             return _UNARY_DERIVATIVES[self.op](self.args[0]) * self.args[0].diff(axis)
         raise NotImplementedError(f"Spatial differentiation is unavailable for {self.op!r}.")
+
+
+def _value_shape(shape):
+    if isinstance(shape, (int, np.integer)):
+        shape = (int(shape),)
+    try:
+        result = tuple(shape)
+    except TypeError as exc:
+        raise TypeError("shape must be an integer or a tuple of positive integers.") from exc
+    if any(
+        isinstance(entry, (bool, np.bool_)) or not isinstance(entry, (int, np.integer)) or entry < 1
+        for entry in result
+    ):
+        raise ValueError("shape entries must be positive integers.")
+    return tuple(int(entry) for entry in result)
+
+
+def _fixed_array(values, location):
+    if isinstance(values, torch.Tensor):
+        values = values.detach().cpu().numpy()
+    array = np.array(values, copy=True)
+    if array.dtype.kind not in "fiu" or array.ndim < 1 or not np.isfinite(array).all():
+        raise ValueError(f"{location} coefficient values must be a finite real array.")
+    array.setflags(write=False)
+    return array
+
+
+class Coefficient(Expr):
+    """A fixed spatial field tabulated when the Galerkin field is constructed."""
+
+    def __init__(self, function, *, shape=()):
+        if not callable(function):
+            raise TypeError("Coefficient(function) requires a callable source.")
+        self.location = "callable"
+        self.source = function
+        super().__init__("coefficient", shape=_value_shape(shape), degrees={0})
+
+    @classmethod
+    def _discrete(cls, values, location):
+        result = cls.__new__(cls)
+        result.location = location
+        result.source = _fixed_array(values, location)
+        Expr.__init__(result, "coefficient", shape=result.source.shape[1:], degrees={0})
+        return result
+
+    @classmethod
+    def cell(cls, values):
+        """A piecewise-constant field with values [cells,*shape]."""
+        return cls._discrete(values, "cell")
+
+    @classmethod
+    def vertex(cls, values):
+        """A continuous P1 field with values [vertices,*shape]."""
+        return cls._discrete(values, "vertex")
+
+    def tabulate(self, geometry, points, cells, barycentric):
+        if self.location == "callable":
+            values = self.source(points)
+        elif self.location == "cell":
+            if len(self.source) != len(geometry.simplices):
+                raise ValueError("A cell coefficient needs one value per simplex.")
+            values = points.new_tensor(self.source.copy())[cells]
+        else:
+            if len(self.source) != len(geometry.vertices):
+                raise ValueError("A vertex coefficient needs one value per vertex.")
+            data = points.new_tensor(self.source.copy())
+            local = data[points.new_tensor(geometry.simplices.copy(), dtype=torch.long)[cells]]
+            weights = barycentric.reshape(
+                len(points), geometry.dimension + 1, *((1,) * len(self.shape))
+            )
+            values = (weights * local).sum(dim=1)
+        values = torch.as_tensor(values, dtype=points.dtype, device=points.device)
+        expected = (len(points), *self.shape)
+        if values.shape != expected:
+            raise ValueError(
+                f"Coefficient must return/have shape {expected}, got {tuple(values.shape)}."
+            )
+        if not torch.isfinite(values).all():
+            raise ValueError("Coefficient returned nonfinite values.")
+        return values.detach()
 
 
 def as_expr(value, spatial_dimension=None):
@@ -215,6 +325,120 @@ def grad(value):
     return stack([value.diff(i) for i in range(value.spatial_dimension)], axis=-1)
 
 
+def _common_dimension(*values):
+    dimensions = {
+        value.spatial_dimension for value in values if value.spatial_dimension is not None
+    }
+    if len(dimensions) > 1:
+        raise ValueError("Expressions use different spatial dimensions.")
+    return next(iter(dimensions), None)
+
+
+def _axes(rank, axes, name):
+    result = []
+    for axis in axes:
+        if not isinstance(axis, (int, np.integer)) or isinstance(axis, (bool, np.bool_)):
+            raise TypeError(f"{name} axes must be integers.")
+        axis = int(axis)
+        axis = axis + rank if axis < 0 else axis
+        if not 0 <= axis < rank or axis in result:
+            raise ValueError(f"Invalid or repeated {name} contraction axis.")
+        result.append(axis)
+    return tuple(result)
+
+
+def _contraction_axes(a, b, axes):
+    if isinstance(axes, (int, np.integer)) and not isinstance(axes, (bool, np.bool_)):
+        count = int(axes)
+        if not 1 <= count <= min(len(a.shape), len(b.shape)):
+            raise ValueError("Integer contraction axes must be between 1 and both tensor ranks.")
+        return tuple(range(len(a.shape) - count, len(a.shape))), tuple(range(count))
+    if not isinstance(axes, (tuple, list)) or len(axes) != 2:
+        raise TypeError("axes must be an integer or a pair of axis sequences.")
+    a_axes = _axes(len(a.shape), axes[0], "left")
+    b_axes = _axes(len(b.shape), axes[1], "right")
+    if len(a_axes) != len(b_axes) or not a_axes:
+        raise ValueError("Contraction axis sequences must have the same nonzero length.")
+    return a_axes, b_axes
+
+
+def contract(a, b, axes=1):
+    """Contract selected physical axes, never batch/test/quadrature axes."""
+    a, b = as_expr(a), as_expr(b)
+    a_axes, b_axes = _contraction_axes(a, b, axes)
+    for left, right in zip(a_axes, b_axes):
+        if a.shape[left] != b.shape[right]:
+            raise ValueError("Contracted tensor dimensions must agree.")
+    shape = tuple(size for i, size in enumerate(a.shape) if i not in a_axes) + tuple(
+        size for i, size in enumerate(b.shape) if i not in b_axes
+    )
+    return Expr(
+        "contract",
+        (a, b),
+        shape=shape,
+        spatial_dimension=_common_dimension(a, b),
+        data=(a_axes, b_axes),
+        degrees=_combine_degrees(a.test_degrees, b.test_degrees, "mul"),
+    )
+
+
+def dot(a, b):
+    return contract(a, b, axes=1)
+
+
+def outer(a, b):
+    a, b = as_expr(a), as_expr(b)
+    return Expr(
+        "outer",
+        (a, b),
+        shape=(*a.shape, *b.shape),
+        spatial_dimension=_common_dimension(a, b),
+        degrees=_combine_degrees(a.test_degrees, b.test_degrees, "mul"),
+    )
+
+
+def transpose(value):
+    value = as_expr(value)
+    if len(value.shape) < 2:
+        raise ValueError("transpose requires a tensor of rank at least two.")
+    shape = (*value.shape[:-2], value.shape[-1], value.shape[-2])
+    return Expr(
+        "transpose",
+        (value,),
+        shape=shape,
+        spatial_dimension=value.spatial_dimension,
+        degrees=value.test_degrees,
+    )
+
+
+def trace(value):
+    value = as_expr(value)
+    if len(value.shape) < 2 or value.shape[-2] != value.shape[-1]:
+        raise ValueError("trace requires equal final tensor axes.")
+    return Expr(
+        "trace",
+        (value,),
+        shape=value.shape[:-2],
+        spatial_dimension=value.spatial_dimension,
+        degrees=value.test_degrees,
+    )
+
+
+def div(value):
+    value = as_expr(value)
+    if not value.shape or value.shape[-1] != value.spatial_dimension:
+        raise ValueError("div requires a final value axis equal to the spatial dimension.")
+    return trace(grad(value))
+
+
+def sym_grad(value):
+    value = as_expr(value)
+    if value.shape != (value.spatial_dimension,):
+        raise ValueError("sym_grad requires a spatial vector field.")
+    derivative = grad(value)
+    return 0.5 * (derivative + transpose(derivative))
+
+
 def inner(a, b):
     a, b = as_expr(a), as_expr(b)
     if a.shape != b.shape:
@@ -222,6 +446,23 @@ def inner(a, b):
     dimension = a.spatial_dimension if a.spatial_dimension is not None else b.spatial_dimension
     degrees = _combine_degrees(a.test_degrees, b.test_degrees, "mul")
     return Expr("inner", (a, b), spatial_dimension=dimension, degrees=degrees)
+
+
+def pointwise(function, *values, shape=()):
+    """Apply a vectorized PyTorch function to expressions independent of v."""
+    if not callable(function) or not values:
+        raise TypeError("pointwise requires a callable and at least one expression.")
+    values = tuple(as_expr(value) for value in values)
+    if any(any(degree != 0 for degree in value.test_degrees) for value in values):
+        raise ValueError("pointwise cannot receive an expression depending on v.")
+    return Expr(
+        "pointwise",
+        values,
+        shape=_value_shape(shape),
+        spatial_dimension=_common_dimension(*values),
+        data=function,
+        degrees={0},
+    )
 
 
 def stack(values, axis=0):
@@ -234,11 +475,12 @@ def stack(values, axis=0):
     shape = list(values[0].shape)
     shape.insert(axis, len(values))
     degrees = frozenset().union(*(value.test_degrees for value in values))
+    dimension = _common_dimension(*values)
     return Expr(
         "stack",
         values,
         shape=shape,
-        spatial_dimension=values[0].spatial_dimension,
+        spatial_dimension=dimension,
         data=axis,
         degrees=degrees,
     )
@@ -291,6 +533,14 @@ class Measure:
             raise ValueError("Normals are defined only for boundary measures.")
         return Expr(
             "normal", shape=(self.spatial_dimension,), spatial_dimension=self.spatial_dimension
+        )
+
+    @property
+    def interior(self):
+        if self.kind != "boundary":
+            raise ValueError("Only the boundary measure reserves an interior-facet measure.")
+        raise NotImplementedError(
+            "Interior facets require a separate traces and orientation contract."
         )
 
     def __rmul__(self, value):
@@ -365,13 +615,43 @@ def build_form(callback, value_shape, spatial_dimension):
     if form is None or not form.integrals:
         raise TypeError("weak(u,v,dx,ds) must return one or more integrals.")
     for integral in form.integrals:
-        if integral.integrand.test_degrees not in (frozenset(), frozenset({1})):
-            raise ValueError("Every integrand must be linear in the test function v.")
+        if integral.integrand.test_degrees != frozenset({1}):
+            raise ValueError(
+                "Every nonzero integrand must depend exactly linearly on the test function v."
+            )
     return form
 
 
 def _pad(value, shape, rank):
     return value.reshape(*value.shape[:3], *((1,) * (rank - len(shape))), *shape)
+
+
+def _expand_leading(value, leading):
+    return value.expand(*leading, *value.shape[3:])
+
+
+def _contract_values(a, b, a_shape, b_shape, axes):
+    leading = torch.broadcast_shapes(a.shape[:3], b.shape[:3])
+    a, b = _expand_leading(a, leading), _expand_leading(b, leading)
+    a_axes, b_axes = axes
+    a_labels = list(range(3, 3 + len(a_shape)))
+    next_label = 3 + len(a_shape)
+    b_labels = []
+    for axis in range(len(b_shape)):
+        if axis in b_axes:
+            b_labels.append(a_labels[a_axes[b_axes.index(axis)]])
+        else:
+            b_labels.append(next_label)
+            next_label += 1
+    output = [label for axis, label in enumerate(a_labels) if axis not in a_axes]
+    output.extend(label for axis, label in enumerate(b_labels) if axis not in b_axes)
+    return torch.einsum(
+        a,
+        [0, 1, 2, *a_labels],
+        b,
+        [0, 1, 2, *b_labels],
+        [0, 1, 2, *output],
+    )
 
 
 def evaluate(expression, context, cache=None):
@@ -399,6 +679,9 @@ def evaluate(expression, context, cache=None):
         if context["normals"] is None:
             raise ValueError("A boundary normal was used in a volume integral.")
         value = context["normals"].reshape(1, 1, len(context["normals"]), *expression.shape)
+    elif op == "coefficient":
+        values = context["coefficient"](expression)
+        value = values.reshape(1, 1, len(values), *expression.shape)
     elif op in ("add", "sub", "mul", "div"):
         a, b = expression.args
         rank = max(len(a.shape), len(b.shape))
@@ -429,6 +712,38 @@ def evaluate(expression, context, cache=None):
         )
         if expression.args[0].shape:
             value = value.sum(dim=tuple(range(3, 3 + len(expression.args[0].shape))))
+    elif op == "contract":
+        a, b = expression.args
+        value = _contract_values(
+            evaluate(a, context, cache),
+            evaluate(b, context, cache),
+            a.shape,
+            b.shape,
+            expression.data,
+        )
+    elif op == "outer":
+        a, b = expression.args
+        av, bv = evaluate(a, context, cache), evaluate(b, context, cache)
+        leading = torch.broadcast_shapes(av.shape[:3], bv.shape[:3])
+        av, bv = _expand_leading(av, leading), _expand_leading(bv, leading)
+        av = av.reshape(*leading, *a.shape, *((1,) * len(b.shape)))
+        bv = bv.reshape(*leading, *((1,) * len(a.shape)), *b.shape)
+        value = av * bv
+    elif op == "transpose":
+        value = evaluate(expression.args[0], context, cache).transpose(-2, -1)
+    elif op == "trace":
+        value = evaluate(expression.args[0], context, cache).diagonal(dim1=-2, dim2=-1).sum(dim=-1)
+    elif op == "pointwise":
+        arguments = [evaluate(argument, context, cache) for argument in expression.args]
+        leading = torch.broadcast_shapes(*(argument.shape[:3] for argument in arguments))
+        arguments = [_expand_leading(argument, leading) for argument in arguments]
+        value = expression.data(*arguments)
+        value = torch.as_tensor(value, dtype=context["dtype"], device=context["device"])
+        expected = (*leading, *expression.shape)
+        if value.shape != expected:
+            raise ValueError(f"pointwise must return shape {expected}, got {tuple(value.shape)}.")
+        if not torch.isfinite(value).all():
+            raise ValueError("pointwise returned nonfinite values.")
     elif op in _UNARY_DERIVATIVES:
         value = getattr(torch, op)(evaluate(expression.args[0], context, cache))
     else:
@@ -447,5 +762,19 @@ def derivative_orders(form):
             expression = stack_.pop()
             if expression.op in ("u", "v"):
                 target.add(len(expression.data))
+            stack_.extend(expression.args)
+    return result
+
+
+def coefficient_expressions(form):
+    result = {"volume": {}, "boundary": {}}
+    for integral in form.integrals:
+        key = integral.measure.label or "all"
+        target = result[integral.measure.kind].setdefault(key, set())
+        stack_ = [integral.integrand]
+        while stack_:
+            expression = stack_.pop()
+            if expression.op == "coefficient":
+                target.add(expression)
             stack_.extend(expression.args)
     return result
