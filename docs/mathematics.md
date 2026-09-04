@@ -44,6 +44,20 @@ El vector exterior usado por `ds.normal` es el opuesto del gradiente normalizado
 esa coordenada baricéntrica. Si `k<p`, es una conormal contenida en el espacio tangente
 del elemento.
 
+Las etiquetas de `boundaries` seleccionan facetas exteriores y las etiquetas de
+`regions` seleccionan símplices máximos. No imponen interpretaciones físicas. Por ello
+`ds("Gamma")` y `dx("Omega_1")` sólo restringen la medida a los elementos nombrados.
+
+Si `Q_e` contiene una base ortonormal de la imagen de `B_e`, el proyector tangencial es
+
+```text
+Pi_e = Q_e Q_e^T.
+```
+
+Toda derivada espacial se representa en las `p` coordenadas ambientes y cada eje
+derivativo se proyecta con `Pi_e`. Así, para `k<p`, `grad(u)` es el gradiente tangencial
+y no depende de la extensión ambiental usada para programar una función de base.
+
 ## Espacio y base
 
 Sea H = L2(Omega_h; R^s), donde `s` puede reemplazarse por una forma tensorial
@@ -58,6 +72,10 @@ La base contiene toda restricción que defina el espacio admisible. La interfaz 
 no interpreta tipos de condición de frontera. Las condiciones naturales se expresan
 en la forma débil; las restricciones esenciales, periódicas, de simetría o de otra
 clase pueden incorporarse al construir las funciones `phi_i`.
+
+Las bases son fijas. Al preparar el campo, sus valores y derivadas se tabulan y se
+separan del grafo de diferenciación. Autograd actúa sobre los coeficientes de estado,
+no sobre parámetros capturados por la implementación de la base.
 
 La síntesis es
 
@@ -92,6 +110,9 @@ a(u;v)
  = sum_r integral_Omega_h I_r(x,u,grad u,...,v,grad v,...) dmu_k
  + sum_Gamma integral_Gamma J_Gamma(x,n,u,...,v,...) dmu_(k-1).
 ```
+
+Las integrales pueden restringirse a regiones y fronteras nombradas sin introducir
+tipos especiales de condición de frontera.
 
 El vector de acciones es
 

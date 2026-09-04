@@ -26,6 +26,22 @@ No se declara un tipo de condición de frontera. La base suministrada por el usu
 define el espacio admisible. Las medidas de frontera sólo añaden los términos escritos
 en `weak`.
 
+La misma geometría puede reutilizarse:
+
+```python
+from ngfield import SimplicialDomain
+
+geometry = SimplicialDomain(
+    vertices=vertices,
+    simplices=simplices,
+    boundaries=boundaries,
+    regions=regions,
+)
+problem = GalerkinProblem(geometry=geometry, weak=weak)
+```
+
+No se combinan `geometry` y los argumentos geométricos directos en una misma llamada.
+
 ## Geometría simplicial
 
 `vertices` tiene forma `[M,p]` y `simplices` forma `[E,k+1]`, con `1 <= k <= p`.
@@ -38,7 +54,7 @@ Los vértices de una cara exterior pueden agruparse por índices:
 boundaries = {"wall": np.array([[1, 2, 3, 4]])}
 ```
 
-o mediante un predicado aplicado a los puntos medios de todas las caras exteriores:
+o mediante un predicado aplicado a los baricentros de todas las caras exteriores:
 
 ```python
 boundaries = {"left": lambda x: x[:, 0] < 0}
@@ -48,6 +64,20 @@ La etiqueta reservada `"all"` existe siempre. El objeto valida rango local,
 incidencias, caras y adyacencias de dominios de dimensión completa. El usuario debe
 suministrar un complejo conforme; detectar todas las intersecciones globales entre
 simplejos distantes queda fuera del contrato.
+
+Las regiones interiores se etiquetan con índices, máscaras, conectividades o
+predicados en los baricentros de los elementos:
+
+```python
+regions = {
+    "material_a": [0, 1, 2],
+    "material_b": lambda x: x[:, 0] >= 0.0,
+}
+```
+
+Un toro triangulado en `R3` se representa con triángulos periódicamente conectados. Su
+dimensión intrínseca es dos, la ambiente es tres y su frontera exterior es vacía. El
+ejemplo completo está en `examples/embedded_torus.py`.
 
 La cuadratura usa un mapa de Duffy y reglas de Gauss-Jacobi en el simplejo de referencia.
 No contiene tablas específicas para 1D, 2D o 3D. Se puede reemplazar con
@@ -68,10 +98,15 @@ def weak(u, v, dx, ds):
     return volume + boundary
 ```
 
-`dx` integra en todos los simplejos. `ds("name")` integra en las caras etiquetadas y
-`ds` sin etiqueta equivale a `ds("all")`. `dx.x` son las coordenadas espaciales y
+`dx` integra en todos los simplejos y `dx("name")` en una región etiquetada.
+`ds("name")` integra en las caras etiquetadas y `ds` sin etiqueta equivale a
+`ds("all")`. `dx.x` son las coordenadas espaciales y
 `ds.normal` es la normal exterior; en un complejo embebido es la conormal unitaria
 dentro del simplejo padre.
+
+En un complejo embebido, `grad` es siempre el gradiente tangencial expresado en las
+coordenadas ambientes. El paquete proyecta las derivadas de una base programable; el
+usuario no debe hacerlo manualmente.
 
 Se proporcionan `grad`, `inner`, `stack`, `sin`, `cos`, `exp`, `log`, `sqrt` y `tanh`,
 además de aritmética, potencias escalares e indexación. `grad` puede componerse para
@@ -103,6 +138,10 @@ El paquete incluye cuatro construcciones:
 
 `TransformedBasis` aplica una combinación lineal a cualquier base. Por ejemplo,
 `problem.orthonormalize(basis)` devuelve coordenadas ortonormales numéricamente en L2.
+
+Las bases son fijas. Sus tablas se congelan al construir `G`; modificar después un
+parámetro capturado por `CallableBasis` no cambia el campo ya preparado. Autograd se
+conserva con respecto a `z`.
 
 Para una base Lagrange se pueden entregar coeficientes
 `[grados_globales,N,*value_shape]`. Sus columnas pueden codificar condiciones de
@@ -166,8 +205,8 @@ la forma son responsabilidad del usuario. Se admiten `float32` y `float64`.
 
 ## Persistencia
 
-`FiniteElementBasis.save(path)` conserva geometría, etiquetas, numeración y coeficientes
-en NPZ sin pickle. `FiniteElementBasis.load(path)` restaura la misma base. Una
+`FiniteElementBasis.save(path)` conserva geometría, regiones, fronteras, numeración y
+coeficientes en NPZ sin pickle. `FiniteElementBasis.load(path)` restaura la misma base. Una
 `CallableBasis` contiene código Python y no se serializa como datos ejecutables.
 
 La API 0.1 basada en `Domain`, `FEMSpace`, `Problem` y `GalerkinBasis` se conserva por

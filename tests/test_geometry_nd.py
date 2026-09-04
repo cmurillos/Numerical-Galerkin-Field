@@ -6,6 +6,29 @@ import pytest
 from ngfield.geometry import SimplicialDomain, reference_quadrature
 
 
+def triangulated_torus(major_radius=2.0, minor_radius=0.5, n_major=16, n_minor=12):
+    vertices = []
+    for i in range(n_major):
+        u = 2 * math.pi * i / n_major
+        for j in range(n_minor):
+            v = 2 * math.pi * j / n_minor
+            radius = major_radius + minor_radius * math.cos(v)
+            vertices.append(
+                [radius * math.cos(u), radius * math.sin(u), minor_radius * math.sin(v)]
+            )
+    cells = []
+
+    def index(i, j):
+        return (i % n_major) * n_minor + (j % n_minor)
+
+    for i in range(n_major):
+        for j in range(n_minor):
+            a, b = index(i, j), index(i + 1, j)
+            c, d = index(i, j + 1), index(i + 1, j + 1)
+            cells.extend(([a, b, d], [a, d, c]))
+    return np.asarray(vertices), np.asarray(cells)
+
+
 @pytest.mark.parametrize("dimension", [1, 2, 3, 4, 6])
 def test_unit_simplex_volume_and_boundary(dimension):
     vertices = np.vstack((np.zeros(dimension), np.eye(dimension)))
@@ -43,6 +66,22 @@ def test_embedded_simplex_uses_induced_measure_and_conormals():
     np.testing.assert_allclose(q.normals[:, 2], 0)
 
 
+def test_closed_torus_is_a_boundaryless_two_complex_in_r3():
+    vertices, cells = triangulated_torus()
+    domain = SimplicialDomain(vertices, cells)
+    assert domain.intrinsic_dimension == 2
+    assert domain.ambient_dimension == 3
+    assert domain.exterior_faces.shape == (0, 2)
+    assert domain.quadrature(boundary="all").weights.size == 0
+    np.testing.assert_allclose(
+        np.trace(domain.tangent_projectors, axis1=1, axis2=2),
+        2.0,
+        atol=1e-12,
+    )
+    exact_area = 4 * math.pi**2 * 2.0 * 0.5
+    assert domain.quadrature(order=2).weights.sum() == pytest.approx(exact_area, rel=0.06)
+
+
 def test_boundary_arrays_and_predicates_are_equivalent():
     vertices = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
     by_face = SimplicialDomain(vertices, [[0, 1, 2]], {"bottom": [[0, 1]]})
@@ -50,6 +89,30 @@ def test_boundary_arrays_and_predicates_are_equivalent():
         vertices, [[0, 1, 2]], {"bottom": lambda x: np.isclose(x[:, 1], 0)}
     )
     np.testing.assert_array_equal(by_face.boundaries["bottom"], by_predicate.boundaries["bottom"])
+
+
+def test_regions_accept_indices_masks_cells_and_predicates():
+    vertices = np.array([[0.0], [0.5], [1.0]])
+    cells = np.array([[0, 1], [1, 2]])
+    domain = SimplicialDomain(
+        vertices,
+        cells,
+        regions={
+            "left": [0],
+            "right": lambda x: x[:, 0] > 0.5,
+            "masked": np.array([True, False]),
+            "by_cell": np.array([[1, 0]]),
+        },
+    )
+    for name in ("left", "masked", "by_cell"):
+        np.testing.assert_array_equal(domain.regions[name], [0])
+    np.testing.assert_array_equal(domain.regions["right"], [1])
+    assert domain.quadrature(region="left").weights.sum() == pytest.approx(0.5)
+    assert domain.quadrature(region="right").weights.sum() == pytest.approx(0.5)
+    with pytest.raises(ValueError, match="Unknown region"):
+        domain.quadrature(region="missing")
+    with pytest.raises(ValueError, match="either a boundary or a volume region"):
+        domain.quadrature(boundary="all", region="left")
 
 
 @pytest.mark.parametrize(

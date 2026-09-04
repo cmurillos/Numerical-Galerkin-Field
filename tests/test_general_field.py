@@ -10,6 +10,7 @@ from ngfield import (
     FiniteElementBasis,
     GalerkinProblem,
     PolynomialBasis,
+    SimplicialDomain,
     grad,
     inner,
     sin,
@@ -92,6 +93,73 @@ def test_callable_basis_derivatives_are_automatic():
     assert torch.isfinite(field(torch.tensor([0.1, -0.2], dtype=field.dtype))).all()
 
 
+def test_callable_derivatives_are_projected_tangentially_and_basis_is_fixed():
+    vertices = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+
+    def make_basis(extension, parameter=None):
+        def values(x):
+            scale = 1.0 if parameter is None else parameter
+            return torch.stack(
+                (torch.ones_like(x[:, 0]), scale * (x[:, 0] + extension * x[:, 2])),
+                dim=1,
+            )
+
+        return CallableBasis(values, dimension=2)
+
+    def weak(u, v, dx, ds):
+        return -inner(grad(u), grad(v)) * dx
+
+    problem = GalerkinProblem(vertices=vertices, simplices=[[0, 1, 2]], weak=weak)
+    flat = problem.field(basis=make_basis(0.0))
+    extended = problem.field(basis=make_basis(7.0))
+    z = torch.tensor([0.2, -0.3], dtype=flat.dtype, requires_grad=True)
+    torch.testing.assert_close(flat(z), extended(z), atol=1e-12, rtol=1e-12)
+
+    parameter = torch.tensor(2.0, dtype=torch.float64, requires_grad=True)
+    frozen = problem.field(basis=make_basis(4.0, parameter))
+    before = frozen(z)
+    with torch.no_grad():
+        parameter.fill_(3.0)
+    torch.testing.assert_close(frozen(z), before, atol=0, rtol=0)
+    frozen(z).sum().backward()
+    assert parameter.grad is None
+
+
+def test_reusable_geometry_and_labeled_volume_measures():
+    geometry = SimplicialDomain(
+        [[0.0], [0.5], [1.0]],
+        [[0, 1], [1, 2]],
+        regions={"left": [0], "right": [1]},
+    )
+
+    def weak(u, v, dx, ds):
+        return u * v * dx("left") + 2.0 * u * v * dx("right")
+
+    problem = GalerkinProblem(geometry=geometry, weak=weak)
+    assert problem.geometry is geometry
+    assert set(problem.regions) == {"all", "left", "right"}
+    basis = FiniteElementBasis(geometry)
+    field = problem.field(basis=basis, quadrature_order=2)
+    z = torch.tensor([0.2, -0.1, 0.4], dtype=field.dtype)
+    left = torch.tensor([[1 / 6, 1 / 12, 0], [1 / 12, 1 / 6, 0], [0, 0, 0]], dtype=field.dtype)
+    right = torch.tensor([[0, 0, 0], [0, 1 / 6, 1 / 12], [0, 1 / 12, 1 / 6]], dtype=field.dtype)
+    expected = torch.linalg.solve(field.mass_matrix, (left + 2 * right) @ z)
+    torch.testing.assert_close(field(z), expected, atol=1e-12, rtol=1e-12)
+
+    with pytest.raises(ValueError, match="cannot be combined"):
+        GalerkinProblem(geometry=geometry, vertices=[[0.0]], simplices=[[0, 0]], weak=weak)
+
+
+def test_unknown_volume_region_is_rejected_when_field_is_built():
+    problem = GalerkinProblem(
+        vertices=[[0.0], [1.0]],
+        simplices=[[0, 1]],
+        weak=lambda u, v, dx, ds: u * v * dx("missing"),
+    )
+    with pytest.raises(ValueError, match="Unknown region"):
+        problem.field(basis=PolynomialBasis(1))
+
+
 def test_numerical_orthonormalization_preserves_physical_functions():
     vertices, cells = unit_simplex(2)
 
@@ -149,11 +217,15 @@ def test_form_rejects_nonlinearity_in_test_function_and_unknown_boundary():
 def test_finite_element_basis_roundtrip(tmp_path):
     vertices, cells = unit_simplex(4)
     problem = GalerkinProblem(
-        vertices=vertices, simplices=cells, weak=lambda u, v, dx, ds: u * v * dx
+        vertices=vertices,
+        simplices=cells,
+        regions={"core": [0]},
+        weak=lambda u, v, dx, ds: u * v * dx,
     )
     basis = FiniteElementBasis(problem.geometry, degree=2)
     path = tmp_path / "basis.npz"
     basis.save(path)
     restored = FiniteElementBasis.load(path)
     assert restored.geometry.same_mesh(problem.geometry)
+    np.testing.assert_array_equal(restored.geometry.regions["core"], [0])
     np.testing.assert_array_equal(restored.element_dofs, basis.element_dofs)

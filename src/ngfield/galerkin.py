@@ -29,8 +29,25 @@ class _Table:
         }
 
 
-def _table(geometry, basis, orders, quadrature_order, boundary, rule, max_points, device, dtype):
-    q = geometry.quadrature(quadrature_order, boundary=boundary, rule=rule, max_points=max_points)
+def _table(
+    geometry,
+    basis,
+    orders,
+    quadrature_order,
+    boundary,
+    region,
+    rule,
+    max_points,
+    device,
+    dtype,
+):
+    q = geometry.quadrature(
+        quadrature_order,
+        boundary=boundary,
+        region=region,
+        rule=rule,
+        max_points=max_points,
+    )
     points = torch.tensor(q.points.copy(), dtype=dtype, device=device)
     cells = torch.tensor(q.cells.copy(), device=device)
     barycentric = torch.tensor(q.barycentric.copy(), dtype=dtype, device=device)
@@ -47,9 +64,16 @@ def _table(geometry, basis, orders, quadrature_order, boundary, rule, max_points
             )
         if values.device != points.device or values.dtype != points.dtype:
             raise ValueError("Basis values must use the field device and dtype.")
+        if order and geometry.dimension < geometry.ambient_dimension:
+            projectors = points.new_tensor(geometry.tangent_projectors.copy())[cells]
+            for axis in range(order):
+                position = values.ndim - order + axis
+                moved = values.movedim(position, -1)
+                moved = torch.einsum("q...b,qab->q...a", moved, projectors)
+                values = moved.movedim(-1, position)
         if not torch.isfinite(values).all():
             raise ValueError("Basis evaluation returned nonfinite values.")
-        tables[order] = values
+        tables[order] = values.detach()
     return _Table(
         points,
         torch.tensor(q.weights.copy(), dtype=dtype, device=device),
@@ -73,10 +97,30 @@ class GalerkinProblem:
     terms explicitly present in weak(u,v,dx,ds).
     """
 
-    def __init__(self, *, vertices, simplices, weak, boundaries=None):
+    def __init__(
+        self,
+        *,
+        weak,
+        geometry=None,
+        vertices=None,
+        simplices=None,
+        boundaries=None,
+        regions=None,
+    ):
         if not callable(weak):
             raise TypeError("weak must be callable.")
-        self.geometry = SimplicialDomain(vertices, simplices, boundaries)
+        if geometry is None:
+            if vertices is None or simplices is None:
+                raise TypeError("Provide geometry or both vertices and simplices.")
+            self.geometry = SimplicialDomain(vertices, simplices, boundaries, regions)
+        else:
+            if not isinstance(geometry, SimplicialDomain):
+                raise TypeError("geometry must be a SimplicialDomain.")
+            if any(value is not None for value in (vertices, simplices, boundaries, regions)):
+                raise ValueError(
+                    "geometry cannot be combined with vertices, simplices, boundaries, or regions."
+                )
+            self.geometry = geometry
         self.weak = weak
 
     @property
@@ -90,6 +134,10 @@ class GalerkinProblem:
     @property
     def boundaries(self):
         return self.geometry.boundaries
+
+    @property
+    def regions(self):
+        return self.geometry.regions
 
     def field(
         self,
@@ -131,6 +179,7 @@ class GalerkinProblem:
             basis,
             {0},
             quadrature_order,
+            None,
             None,
             quadrature_rule,
             max_quadrature_points,
@@ -180,17 +229,25 @@ class GalerkinField:
         self.dimension, self.value_shape = basis.dimension, value_shape
         self.form = build_form(problem.weak, value_shape, problem.geometry.ambient_dimension)
         required = derivative_orders(self.form)
-        self._volume = _table(
-            problem.geometry,
-            basis,
-            required["volume"],
-            quadrature_order,
-            None,
-            quadrature_rule,
-            max_quadrature_points,
-            device,
-            dtype,
-        )
+        volume_orders = {"all": {0}}
+        for name, orders in required["volume"].items():
+            volume_orders.setdefault(name, set()).update(orders)
+        self._volumes = {
+            name: _table(
+                problem.geometry,
+                basis,
+                orders,
+                quadrature_order,
+                None,
+                None if name == "all" else name,
+                quadrature_rule,
+                max_quadrature_points,
+                device,
+                dtype,
+            )
+            for name, orders in volume_orders.items()
+        }
+        self._volume = self._volumes["all"]
         self._boundary = {
             name: _table(
                 problem.geometry,
@@ -198,6 +255,7 @@ class GalerkinField:
                 orders,
                 quadrature_order,
                 name,
+                None,
                 quadrature_rule,
                 max_quadrature_points,
                 device,
@@ -238,7 +296,7 @@ class GalerkinField:
     @property
     def table_bytes(self):
         tensors = [self.mass_matrix, self._mass_factor]
-        for table in (self._volume, *self._boundary.values()):
+        for table in (*self._volumes.values(), *self._boundary.values()):
             tensors.extend((table.points, table.weights, table.cells, table.barycentric))
             tensors.extend(table.basis.values())
             if table.normals is not None:
@@ -250,7 +308,7 @@ class GalerkinField:
         dtype = self.dtype if dtype is None else dtype
         if dtype not in (torch.float32, torch.float64):
             raise ValueError("Use torch.float32 or torch.float64.")
-        for table in (self._volume, *self._boundary.values()):
+        for table in (*self._volumes.values(), *self._boundary.values()):
             table.to(device, dtype)
         self.mass_matrix = self.mass_matrix.to(device=device, dtype=dtype)
         self._mass_factor = torch.linalg.cholesky((self.mass_matrix + self.mass_matrix.T) / 2)
@@ -275,7 +333,10 @@ class GalerkinField:
 
     def _action(self, z, test):
         result = z.new_zeros((len(z), test.stop - test.start))
-        by_measure = {("volume", None): self._volume}
+        by_measure = {
+            ("volume", None if name == "all" else name): table
+            for name, table in self._volumes.items()
+        }
         by_measure.update((("boundary", name), table) for name, table in self._boundary.items())
         caches = {key: {} for key in by_measure}
         for integral in self.form.integrals:

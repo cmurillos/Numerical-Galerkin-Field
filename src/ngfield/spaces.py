@@ -16,7 +16,7 @@ class Basis(Protocol):
     """Fixed basis contract; derivatives use ambient Cartesian axes.
 
     evaluate returns [Q,N,*value_shape,*([ambient_dim]*order)]. On embedded
-    simplices, the field projects derivative axes onto the element tangent space.
+    simplices, the field projects every derivative axis onto the element tangent space.
     cells and barycentric refer to the problem geometry and may be ignored by
     globally evaluable bases. Basis parameters are fixed when a field is prepared.
     """
@@ -258,9 +258,17 @@ class FiniteElementBasis:
     def save(self, path, *, overwrite=False):
         """Persist numerical modes and geometry without serializing executable callbacks."""
         names = [name for name in self.geometry.boundaries if name != "all"]
+        regions = [name for name in self.geometry.regions if name != "all"]
         arrays = {
             "metadata": np.array(
-                json.dumps({"schema": 1, "degree": self.degree, "boundaries": names})
+                json.dumps(
+                    {
+                        "schema": 2,
+                        "degree": self.degree,
+                        "boundaries": names,
+                        "regions": regions,
+                    }
+                )
             ),
             "vertices": self.geometry.vertices,
             "simplices": self.geometry.simplices,
@@ -270,6 +278,8 @@ class FiniteElementBasis:
             arrays["coefficients"] = self.coefficients
         for i, name in enumerate(names):
             arrays[f"boundary_{i}"] = self.geometry.exterior_faces[self.geometry.boundaries[name]]
+        for i, name in enumerate(regions):
+            arrays[f"region_{i}"] = self.geometry.regions[name]
         with Path(path).open("wb" if overwrite else "xb") as stream:
             np.savez_compressed(stream, **arrays)
 
@@ -277,12 +287,18 @@ class FiniteElementBasis:
     def load(cls, path):
         with np.load(path, allow_pickle=False) as data:
             metadata = json.loads(str(data["metadata"]))
-            if metadata["schema"] != 1:
+            if metadata["schema"] not in (1, 2):
                 raise ValueError("Unsupported finite-element basis schema.")
+            regions = (
+                {name: data[f"region_{i}"] for i, name in enumerate(metadata.get("regions", []))}
+                if metadata["schema"] >= 2
+                else None
+            )
             geometry = SimplicialDomain(
                 data["vertices"],
                 data["simplices"],
                 {name: data[f"boundary_{i}"] for i, name in enumerate(metadata["boundaries"])},
+                regions,
             )
             result = cls(
                 geometry,

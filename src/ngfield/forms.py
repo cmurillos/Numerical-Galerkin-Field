@@ -305,10 +305,6 @@ class Integral:
     def __post_init__(self):
         if self.integrand.shape:
             raise ValueError("Each weak integrand must be scalar-valued; use inner or indexing.")
-        if self.measure.kind == "volume" and self.measure.label is not None:
-            raise NotImplementedError(
-                "Cell subdomain labels are reserved for a future geometry extension."
-            )
 
     def __add__(self, other):
         return Form((self,)) + other
@@ -442,14 +438,10 @@ def evaluate(expression, context, cache=None):
 
 
 def derivative_orders(form):
-    result = {"volume": set(), "boundary": {}}
+    result = {"volume": {}, "boundary": {}}
     for integral in form.integrals:
-        key = "volume" if integral.measure.kind == "volume" else integral.measure.label or "all"
-        target = (
-            result["volume"]
-            if integral.measure.kind == "volume"
-            else result["boundary"].setdefault(key, set())
-        )
+        key = integral.measure.label or "all"
+        target = result[integral.measure.kind].setdefault(key, set())
         stack_ = [integral.integrand]
         while stack_:
             expression = stack_.pop()

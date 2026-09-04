@@ -69,10 +69,11 @@ class SimplicialDomain:
     Supports full-dimensional domains and embedded piecewise affine manifolds.
     Inputs must form a conforming complex. Structural and local incidence checks
     are performed; arbitrary intersections between distant cells are not detected.
-    Boundary labels contain vertex-index faces [F,k], or midpoint predicates.
+    Boundary labels contain vertex-index faces [F,k], or barycenter predicates.
+    Region labels contain cell indices, masks, cell rows, or barycenter predicates.
     """
 
-    def __init__(self, vertices, simplices, boundaries=None):
+    def __init__(self, vertices, simplices, boundaries=None, regions=None):
         p = np.asarray(vertices)
         t = np.asarray(simplices)
         if p.dtype.kind not in "fiu" or p.ndim != 2 or not p.size:
@@ -92,6 +93,7 @@ class SimplicialDomain:
         self.vertices = readonly(p, np.float64)
         self.simplices = readonly(t, np.int64)
         self.dimension = k
+        self.intrinsic_dimension = k
         self.ambient_dimension = p.shape[1]
         corners = self.vertices[t]
         edges = np.swapaxes(corners[:, 1:] - corners[:, :1], 1, 2)
@@ -101,6 +103,7 @@ class SimplicialDomain:
         q, r = np.linalg.qr(edges, mode="reduced")
         self.jacobians = readonly(np.abs(np.linalg.det(r)))
         self.inverse_jacobians = readonly(np.linalg.solve(r, np.swapaxes(q, 1, 2)))
+        self.tangent_projectors = readonly(np.einsum("eik,ejk->eij", q, q))
         gradients = np.concatenate(
             (-self.inverse_jacobians.sum(axis=1, keepdims=True), self.inverse_jacobians),
             axis=1,
@@ -144,17 +147,59 @@ class SimplicialDomain:
             labels[name] = readonly(np.unique(indices), np.int64)
         self.boundaries = MappingProxyType(labels)
 
+        cell_labels = {"all": readonly(np.arange(len(t)), np.int64)}
+        cell_lookup = {tuple(row): i for i, row in enumerate(canonical)}
+        centers = corners.mean(axis=1)
+        for name, cells in (regions or {}).items():
+            if not isinstance(name, str) or not name or name == "all":
+                raise ValueError("Region names must be nonempty; 'all' is reserved.")
+            if callable(cells):
+                mask = np.asarray(cells(centers))
+                if mask.shape != (len(t),) or mask.dtype.kind != "b":
+                    raise ValueError("A region predicate must return a boolean [cells] array.")
+                indices = np.flatnonzero(mask)
+            else:
+                cells = np.asarray(cells)
+                if cells.dtype.kind == "b" and cells.shape == (len(t),):
+                    indices = np.flatnonzero(cells)
+                elif cells.dtype.kind in "iu" and cells.ndim == 1:
+                    if np.any(cells < 0) or np.any(cells >= len(t)):
+                        raise ValueError("A region contains an invalid cell index.")
+                    indices = cells
+                elif cells.dtype.kind in "iu" and cells.ndim == 2 and cells.shape[1] == k + 1:
+                    try:
+                        indices = [cell_lookup[tuple(sorted(cell.tolist()))] for cell in cells]
+                    except KeyError as exc:
+                        raise ValueError("A region contains a cell outside the domain.") from exc
+                else:
+                    raise ValueError(
+                        "Regions must be cell indices, a boolean [cells] mask, "
+                        "integer cells [R,k+1], or a predicate."
+                    )
+            cell_labels[name] = readonly(np.unique(indices), np.int64)
+        self.regions = MappingProxyType(cell_labels)
+
     def same_mesh(self, other):
         return np.array_equal(self.vertices, other.vertices) and np.array_equal(
             self.simplices, other.simplices
         )
 
-    def quadrature(self, order=4, *, boundary=None, rule=None, max_points=1_000_000):
+    def quadrature(
+        self,
+        order=4,
+        *,
+        boundary=None,
+        region=None,
+        rule=None,
+        max_points=1_000_000,
+    ):
         """Custom rule(dimension, order) returns reference barycentric points, weights.
 
         Weights integrate the reference simplex, not a probability distribution.
         Boundary quadrature carries coordinates in its parent volume cell.
         """
+        if boundary is not None and region is not None:
+            raise ValueError("Choose either a boundary or a volume region, not both.")
         order = positive_integer(order, "order", 0)
         max_points = positive_integer(max_points, "max_points")
         dim = self.dimension - (boundary is not None)
@@ -175,10 +220,13 @@ class SimplicialDomain:
             raise ValueError("Invalid simplex quadrature rule.")
         nq = len(bary)
         if boundary is None:
-            cells = np.arange(len(self.simplices))
-            corners = self.vertices[self.simplices]
+            label = "all" if region is None else region
+            if label not in self.regions:
+                raise ValueError(f"Unknown region {label!r}.")
+            cells = self.regions[label]
+            corners = self.vertices[self.simplices[cells]]
             cell_bary = np.broadcast_to(bary, (len(cells), *bary.shape))
-            factors = self.jacobians
+            factors = self.jacobians[cells]
             normals = None
         else:
             if boundary not in self.boundaries:
