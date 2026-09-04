@@ -1,169 +1,161 @@
-# Formulación matemática y realización numérica
+# Contrato matemático
 
-## 1. Objeto del paquete
+## Geometría
 
-Sean un dominio acotado Ω ⊂ ℝᵐ y el espacio real H = L²(Ω; ℝᵈ), con el
-producto interno que suma las integrales de las componentes. Los símbolos son:
+Sean `P` una matriz de `M` puntos de R^p y `T` una matriz de índices con `k+1`
+columnas. Cada fila determina el k-simplejo
 
-| Símbolo | Significado |
-|---|---|
-| m | Dimensión espacial: 1, 2 o 3 en la implementación actual. |
-| d | Número de componentes del estado. |
-| nₕ | Número de grados de libertad FEM **escalares**. |
-| Nᵣ | Modos retenidos en la componente r. |
-| N = Σᵣ Nᵣ | Dimensión total de entrada y salida del campo reducido. |
-| Q | Número total de puntos de cuadratura volumétrica, sumando los elementos. |
-| B | Número de estados independientes de un lote. |
+```text
+K_e = conv{P[T_e,0], ..., P[T_e,k]},       1 <= k <= p.
+```
 
-El operador de evolución se suministra mediante su acción débil a(u;v), lineal
-en v. No se exige linealidad, simetría ni una estructura de gradiente en u.
-Para una base ortonormal admisible {φᵢ} de un subespacio V_N, la síntesis es
+Se supone que estos simplejos forman un complejo conforme, no degenerado, con
+interiores disjuntos. Su unión define el dominio discreto Omega_h. Para `k=p` se usa
+la medida de Lebesgue; para `k<p`, la medida k-dimensional inducida por la inmersión
+afín.
 
-$$
-\Phi:\mathbb R^N\to V_N,\qquad \Phi z=\sum_{i=1}^N z_i\varphi_i,
-\qquad [G(z)]_i=a(\Phi z;\varphi_i).
-$$
+El mapa del simplejo de referencia es
 
-El paquete aproxima esta evaluación numérica. Obtener G(z) no requiere integrar
-la EDO ż = G(z), construir trayectorias ni disponer de soluciones de referencia.
+```text
+F_e(xi) = P[T_e,0] + B_e xi,
+B_e = [P[T_e,1]-P[T_e,0], ..., P[T_e,k]-P[T_e,0]].
+```
 
-## 2. Dominio, fronteras y espacio FEM
+El factor geométrico común a ambos casos es
 
-La entrada efectiva es una malla afín de segmentos, triángulos o tetraedros.
-Un dominio curvo está aproximado por su malla Ωₕ; este error geométrico se debe
-distinguir del error en los modos y en las integrales. Se utilizan elementos
-continuos P1 o P2 sobre esa geometría, con una base escalar {ψₖ}.
+```text
+J_e = sqrt(det(B_e^T B_e)).
+```
 
-Las condiciones esenciales homogéneas se incorporan eliminando exactamente sus
-grados de libertad en el cálculo de modos. Cada componente puede tener un
-conjunto distinto de etiquetas esenciales. Todas comparten malla y grado FEM.
-Los términos naturales de frontera pertenecen a la forma débil del usuario.
+Para `k=p`, coincide con `abs(det(B_e))`. En consecuencia,
 
-El dominio y la fórmula diferencial no bastan para especificar una EDP: el
-espacio variacional y sus condiciones de frontera también son parte del problema.
-La conformidad H¹ de P1/P2 no basta por sí sola para formas que exijan H²,
-restricciones de divergencia o trazas especiales.
+```text
+integral_K_e f dmu_k = J_e integral_Khat f(F_e(xi)) dxi.
+```
 
-## 3. Base de referencia
+Las caras pertenecientes a un único elemento constituyen la frontera. Una cara tiene
+dimensión `k-1`, y su medida satisface
 
-Se usa el Laplaciano positivo como operador auxiliar. Se ensamblan
+```text
+J_face = J_e norm(grad lambda_opposite).
+```
 
-$$
-(M_h)_{k\ell}=\int_{\Omega_h}\psi_\ell\psi_k\,dx,
-\qquad (K_h)_{k\ell}=\int_{\Omega_h}\nabla\psi_\ell\cdot\nabla\psi_k\,dx.
-$$
+El vector exterior usado por `ds.normal` es el opuesto del gradiente normalizado de
+esa coordenada baricéntrica. Si `k<p`, es una conormal contenida en el espacio tangente
+del elemento.
 
-Ambas matrices tienen tamaño nₕ × nₕ. Después de eliminar los grados esenciales
-de cada componente, se resuelve Kₕc = λMₕc y se seleccionan los valores propios
-más pequeños. En el resto de la frontera, el **problema auxiliar** tiene la
-condición natural de Neumann. Esto no obliga al operador real a ser un Laplaciano
-ni impide incorporar términos Robin en su acción débil.
+## Espacio y base
 
-El caso Neumann incluye sus modos nulos; no se elimina automáticamente la media.
-En dominios desconectados puede haber más de un modo nulo. El solver disperso
-usa un desplazamiento negativo para evitar invertir una rigidez singular.
+Sea H = L2(Omega_h; R^s), donde `s` puede reemplazarse por una forma tensorial
+arbitraria. El usuario suministra funciones linealmente independientes
 
-Para cada componente r se guarda Cᵣ ∈ ℝⁿʰˣᴺʳ, con ceros en los grados esenciales,
-y se normaliza de modo que CᵣᵀMₕCᵣ = I. La matriz vectorial conceptual es
+```text
+phi_1, ..., phi_N in H,
+V_N = span{phi_1, ..., phi_N}.
+```
 
-$$
-C=\operatorname{diag}(C_1,\ldots,C_d),\qquad
-\mathcal M_h=\operatorname{diag}(M_h,\ldots,M_h),\qquad
-C^\top\mathcal M_h C=I_N.
-$$
+La base contiene toda restricción que defina el espacio admisible. La interfaz central
+no interpreta tipos de condición de frontera. Las condiciones naturales se expresan
+en la forma débil; las restricciones esenciales, periódicas, de simetría o de otra
+clase pueden incorporarse al construir las funciones `phi_i`.
 
-No se almacena esa gran matriz de bloques: coefficients[r] contiene Cᵣ.
-El orden de los coeficientes es por componente, y dentro de cada componente
-por valor propio creciente. Se fija el signo de cada modo usando su coeficiente
-de mayor módulo. Esto no elimina la libertad de rotación de autoespacios múltiples.
-Para reproducibilidad se guarda la base calculada, en lugar de regenerarla.
+La síntesis es
 
-La masa se calcula con una regla de grado al menos 2p, donde p es el grado FEM.
-En geometría afín integra exactamente los productos polinómicos de las funciones
-de forma, salvo redondeo. La identidad de masa corresponde al dominio mallado
-y al producto discreto elegido; no afirma exactitud de los modos del dominio Ω.
+```text
+Phi: R^N -> V_N,
+Phi z = sum_j z_j phi_j = u_z.
+```
 
-## 4. Campo discreto y proyección directa
+La matriz de Gram es
 
-Si rₕ,Q es la acción débil ensamblada contra la base FEM vectorial, entonces
+```text
+M_ij = (phi_j, phi_i)_H.
+```
 
-$$
-G_{h,Q}(z)=C^\top r_{h,Q}(Cz).
-$$
+El programa calcula esta matriz mediante la misma cuadratura del volumen. También
+acepta una matriz simétrica positiva definida suministrada por el usuario para
+representar otro producto interno fijo.
 
-En efecto, por linealidad respecto de la función de prueba,
+## Forma débil y campo reducido
 
-$$
-\big[C^\top r_{h,Q}(Cz)\big]_i
-=\sum_k C_{ki}\,a_{h,Q}(\Psi_h Cz;\psi_k)
-=a_{h,Q}(\Phi_h z;\varphi_{i,h}).
-$$
+La función Python describe una única aplicación
 
-No se necesita resolver un sistema con la masa FEM para cada estado. Si se
-representara primero una acción fuerte por y mediante ℳₕy = rₕ,Q, su proyección
-sería Cᵀℳₕy = Cᵀrₕ,Q. La cancelación no identifica ℳₕ con la identidad.
+```text
+a: D_a x V_N -> R,
+```
 
-La implementación evita incluso formar el vector rₕ,Q cuando evalúa el campo:
-precalcula los modos reducidos y sus gradientes en los puntos de integración,
-reconstruye allí el estado y contrae directamente con las funciones de prueba.
-Ambas realizaciones coinciden algebraicamente si utilizan la misma cuadratura.
+posiblemente no lineal en el estado `u` y lineal en la función de prueba `v`. Una
+expresión puede contener integrales de volumen y de frontera:
 
-## 5. Contrato de forma débil
+```text
+a(u;v)
+ = sum_r integral_Omega_h I_r(x,u,grad u,...,v,grad v,...) dmu_k
+ + sum_Gamma integral_Gamma J_Gamma(x,n,u,...,v,...) dmu_(k-1).
+```
 
-La primera implementación admite acciones locales de la forma
+El vector de acciones es
 
-$$
-a(u;v)=\int_{\Omega_h}
-\left[f_0(x,u,\nabla u)\cdot v+f_1(x,u,\nabla u):\nabla v\right]dx
-+\sum_{\Gamma}\int_{\Gamma}b_\Gamma(x,u,\nabla u,n)\cdot v\,ds.
-$$
+```text
+g_i(z) = a(Phi z; phi_i).
+```
 
-Aquí f₀ tiene d componentes, f₁ es una matriz d × m y n es la normal exterior.
-Las funciones pueden acoplar todas las componentes del estado. Los callbacks
-reciben el lote completo, pero deben actuar independientemente sobre cada estado.
-La proyección no impone una convención extra de signo: para difusión
-uₜ = div(κ∇u) + g(u), el término volumétrico es f₀ = g(u), f₁ = −κ∇u.
-El flujo de frontera aparece con el signo de la integración por partes.
+El campo de Galerkin es la velocidad coordenada única que satisface
 
-Los tensores calculados se organizan como
+```text
+M G(z) = g(z).
+```
 
-$$
-Z\in\mathbb R^{B\times N},\quad
-U\in\mathbb R^{B\times d\times Q},\quad
-\nabla U\in\mathbb R^{B\times d\times Q\times m},\quad
-G^{[B]}(Z)\in\mathbb R^{B\times N}.
-$$
+Equivalentemente, la función
 
-Las contracciones se vectorizan sobre los estados y los modos. Sólo hay bucles
-de evaluación sobre componentes físicas y etiquetas de frontera. Los primeros
-ejes nunca representan una mezcla entre estados independientes.
+```text
+w_z = Phi G(z)
+```
 
-## 6. Precisión y alcance de las comprobaciones
+es el representante en `V_N` definido por
 
-Se distinguen: truncamiento del espacio reducido, aproximación de geometría y
-modos por FEM, cuadratura de la acción y redondeo. La ortonormalidad no elimina
-los errores de integración de una no linealidad. Para estudiar cuadratura se
-mantiene **la misma base guardada** y se cambia únicamente quadrature_order.
+```text
+(w_z, v_N)_H = a(Phi z; v_N)       para todo v_N en V_N.
+```
 
-Al comparar mallas, las coordenadas de sus modos pueden tener signos o rotaciones
-distintos, especialmente ante valores propios múltiples. No se deben restar
-campos coordenados entre mallas sin alinear las bases o comparar cantidades
-invariantes/funcionales. El test de refinamiento usa el primer modo de calor en
-un intervalo, cuyo límite y significado están fijados analíticamente.
+Si la base es ortonormal, `M=I` y `G_i(z)=a(Phi z;phi_i)`. Si existe una realización
+fuerte `A(Phi z)` en `H`, entonces `w_z` es la proyección de ese campo sobre `V_N`.
 
-La suite compara el campo con el espectro discreto conocido de P1, con ensamblaje
-FEM independiente para una forma acoplada no lineal, con identidades de frontera
-y con refinamientos de malla/cuadratura. También verifica derivación automática,
-persistencia y lotes. La prueba CUDA se ejecuta sólo si hay GPU; la CI alojada
-en runners estándar verifica CPU y no certifica rendimiento ni precisión CUDA.
+Una trayectoria de Galerkin satisface
 
-Estos tests verifican implementaciones y casos de referencia; no son un teorema
-de convergencia para cualquier operador suministrado por el usuario.
+```text
+z'(t) = G(z(t)),
+u_N(t) = Phi z(t).
+```
 
-## Referencias
+La biblioteca construye y evalúa `G`; la integración de esta EDO es una operación
+posterior e independiente.
 
-- [scikit-fem: API de mallas, bases, cuadratura y ensamblaje](https://scikit-fem.readthedocs.io/en/latest/api.html).
-- [FreeFEM: problema variacional de valores propios del Laplaciano](https://doc.freefem.org/models/eigen-value-problems.html).
-- [SciPy: eigsh y problemas generalizados con matriz de masa](https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.linalg.eigsh.html).
-- [SciPy: eigh para problemas simétricos generalizados](https://docs.scipy.org/doc/scipy/reference/generated/scipy.linalg.eigh.html).
-- [PyTorch: contracciones tensoriales con einsum](https://docs.pytorch.org/docs/stable/generated/torch.einsum.html).
+## Cuadratura en dimensión arbitraria
+
+Se usa la transformación de Duffy del cubo unitario al simplejo de referencia. Su
+jacobiano se absorbe mediante reglas de Gauss-Jacobi. Con suficientes nodos por eje,
+la regla integra exactamente polinomios de un grado total solicitado, en aritmética
+exacta. El número de puntos crece exponencialmente con `k`, por lo que la API expone un
+presupuesto máximo y permite reemplazar la regla completa.
+
+Una regla externa devuelve:
+
+```text
+barycentric: [Q,k+1],    sum_i barycentric[q,i] = 1,
+weights:     [Q].
+```
+
+Los pesos corresponden a la medida del simplejo de referencia. El dominio aplica los
+factores geométricos físicos.
+
+## Alcance numérico
+
+No hay un límite lógico de dimensión codificado en la geometría, las funciones
+polinómicas o la cuadratura. Permanecen límites computacionales: crecimiento del número
+de simplejos, grados de libertad, modos y puntos de integración.
+
+Los simplejos son afines. Las fronteras curvas se aproximan con el complejo o requieren
+una futura extensión isoparamétrica. `FiniteElementBasis` produce Lagrange continuo de
+grado arbitrario; las derivadas de orden superior son elementales y no implican por sí
+mismas conformidad global en H2 u otros espacios. La validez analítica de una forma
+respecto del espacio elegido continúa siendo una condición matemática del problema.

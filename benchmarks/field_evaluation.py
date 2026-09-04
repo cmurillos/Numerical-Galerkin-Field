@@ -1,4 +1,4 @@
-"""Measure preprocessing, batched field latency and resident table memory."""
+"""Measure general-field preparation, batch latency and resident table memory."""
 
 import argparse
 import json
@@ -8,15 +8,13 @@ from pathlib import Path
 
 import numpy as np
 import scipy
-import skfem
 import torch
-from skfem import MeshTri
 
-from ngfield import Domain, FEMSpace, GalerkinBasis, GalerkinField, Problem
+from ngfield import FiniteElementBasis, GalerkinProblem, grad, inner
 
 
-def action(x, u, grad):
-    return u - u**3, -0.1 * grad
+def weak(u, v, dx, ds):
+    return (u - u**3) * v * dx - 0.1 * inner(grad(u), grad(v)) * dx
 
 
 def synchronize(device):
@@ -29,24 +27,27 @@ def main():
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--batch-sizes", type=int, nargs="+", default=[1, 16, 64])
     parser.add_argument("--modes", type=int, nargs="+", default=[8, 16])
-    parser.add_argument("--quadrature-order", type=int, default=4)
-    parser.add_argument("--refinements", type=int, default=3)
+    parser.add_argument("--quadrature-order", type=int, default=6)
     parser.add_argument("--repeats", type=int, default=10)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if min(args.batch_sizes + args.modes + [args.repeats]) < 1:
         parser.error("Batch sizes, mode counts and repeats must be positive.")
     device = torch.device(args.device)
-    problem = Problem(1, action, (("all",),))
+    segments = max(args.modes) + 1
+    vertices = np.linspace(0, 1, segments + 1)[:, None]
+    simplices = np.column_stack((np.arange(segments), np.arange(1, segments + 1)))
+    problem = GalerkinProblem(vertices=vertices, simplices=simplices, weak=weak)
     start = time.perf_counter()
-    fem = FEMSpace(Domain(MeshTri.init_lshaped().refined(args.refinements)))
-    mesh_and_fem_seconds = time.perf_counter() - start
+    nodal = FiniteElementBasis(problem.geometry)
+    geometry_seconds = time.perf_counter() - start
     results = []
     for modes in args.modes:
+        coefficients = np.sin(np.pi * vertices * np.arange(1, modes + 1)[None, :])
+        basis = FiniteElementBasis(problem.geometry, coefficients=coefficients)
         synchronize(device)
         start = time.perf_counter()
-        basis = GalerkinBasis.build(fem, problem, modes)
-        field = GalerkinField(basis, problem, args.quadrature_order, device=device)
+        field = problem.field(basis=basis, quadrature_order=args.quadrature_order, device=device)
         synchronize(device)
         preparation = time.perf_counter() - start
         for batch_size in args.batch_sizes:
@@ -67,7 +68,7 @@ def main():
                     "N": modes,
                     "B": batch_size,
                     "Q": field.quadrature_size,
-                    "basis_and_tables_seconds": preparation,
+                    "field_preparation_seconds": preparation,
                     "seconds_per_batch": elapsed,
                     "states_per_second": batch_size / elapsed,
                     "table_bytes": field.table_bytes,
@@ -80,14 +81,13 @@ def main():
         "python": platform.python_version(),
         "numpy": np.__version__,
         "scipy": scipy.__version__,
-        "scikit_fem": skfem.__version__,
         "torch": torch.__version__,
         "device": str(device),
         "gpu": torch.cuda.get_device_name(device) if device.type == "cuda" else None,
         "dtype": "float64",
         "autograd": False,
-        "mesh_and_fem_seconds": mesh_and_fem_seconds,
-        "scalar_fem_dofs": fem.ndofs,
+        "geometry_seconds": geometry_seconds,
+        "nodal_dofs": nodal.ndofs,
         "repeats": args.repeats,
         "results": results,
     }

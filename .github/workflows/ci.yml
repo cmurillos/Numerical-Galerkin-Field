@@ -46,6 +46,7 @@ jobs:
         run: python -m pytest --junitxml=test-results.xml
       - name: Run examples
         run: |
+          python examples/general_problem.py
           python examples/diffusion.py
           python examples/reaction_diffusion.py
       - name: Exercise benchmark and build distribution

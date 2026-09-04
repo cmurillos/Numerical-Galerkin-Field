@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "numerical-galerkin-field"
-version = "0.1.0"
-description = "Direct weak Galerkin vector fields on finite-element spectral bases"
+version = "0.2.0"
+description = "General direct weak Galerkin fields on simplicial geometries"
 requires-python = ">=3.11"
 dependencies = [
   "numpy>=1.26,<3",

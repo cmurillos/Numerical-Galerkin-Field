@@ -1,206 +1,174 @@
-# Uso y contratos de Numerical Galerkin Field
+# Interfaz general de Numerical Galerkin Field
 
-## Instalación
+## Problema mínimo
 
-Python 3.11 o superior. Desde el repositorio:
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install -e '.[dev]'
-```
-
-En Windows se activa con .venv\Scripts\activate. Para CUDA, instalar primero la
-distribución apropiada de PyTorch siguiendo su [selector oficial](https://pytorch.org/get-started/locally/).
-La preparación FEM y espectral utiliza CPU; el campo acepta CPU o CUDA.
-La licencia de distribución está pendiente de elección por el propietario.
-
-## Ejemplo mínimo
+La interfaz central sólo recibe la geometría simplicial y una forma débil completa:
 
 ```python
-import torch
-from skfem import MeshTri
-from ngfield import Domain, FEMSpace, Problem, GalerkinBasis, GalerkinField
+import numpy as np
+from ngfield import FiniteElementBasis, GalerkinProblem, grad, inner, sin
 
 
-def volume(x, u, grad_u):
-    return u - u**3, -0.1 * grad_u
+vertices = np.array([[0.0], [0.5], [1.0]])
+simplices = np.array([[0, 1], [1, 2]])
 
 
-domain = Domain(MeshTri.init_lshaped().refined(3))
-problem = Problem(components=1, volume=volume, dirichlet=(("all",),))
-space = FEMSpace(domain, degree=1)
-basis = GalerkinBasis.build(space, problem, modes=12)
-G = GalerkinField(basis, problem, quadrature_order=6)
+def weak(u, v, dx, ds):
+    return -0.1 * inner(grad(u), grad(v)) * dx
 
-Z = torch.randn(32, basis.dimension, dtype=G.dtype, device=G.device)
-Y = G(Z)  # [32,12]
+
+problem = GalerkinProblem(vertices=vertices, simplices=simplices, weak=weak)
+basis = FiniteElementBasis(problem.geometry, degree=1)
+G = problem.field(basis=basis)
 ```
 
-El objeto G está listo para evaluar estados; no resuelve una evolución temporal.
-Las nuevas EDP se definen en los scripts del usuario mediante callbacks.
+No se declara un tipo de condición de frontera. La base suministrada por el usuario
+define el espacio admisible. Las medidas de frontera sólo añaden los términos escritos
+en `weak`.
 
-## Dominio y fronteras
+## Geometría simplicial
 
-Domain acepta mallas afines de segmentos, triángulos o tetraedros de scikit-fem.
-También puede importar archivos mediante meshio, por ejemplo .msh o .vtu:
+`vertices` tiene forma `[M,p]` y `simplices` forma `[E,k+1]`, con `1 <= k <= p`.
+Se admiten dominios de dimensión intrínseca `k` en un ambiente euclídeo de dimensión
+`p`, incluidos simplejos de dimensión arbitraria y complejos afines embebidos.
+
+Los vértices de una cara exterior pueden agruparse por índices:
 
 ```python
-domain = Domain.from_file("geometria.msh")
+boundaries = {"wall": np.array([[1, 2, 3, 4]])}
 ```
 
-La geometría y las etiquetas físicas admitidas por el importador se conservan.
-Se debe inspeccionar domain.mesh.boundaries para verificar los nombres importados.
-La etiqueta reservada "all" siempre denota toda la frontera exterior.
-Para etiquetar por predicados evaluados en puntos medios de facetas:
+o mediante un predicado aplicado a los puntos medios de todas las caras exteriores:
 
 ```python
-domain = domain.with_boundaries(left=lambda x: x[0] < -0.999)
+boundaries = {"left": lambda x: x[:, 0] < 0}
 ```
 
-Los predicados reciben coordenadas con convenio scikit-fem [m,facetas]; esto es
-distinto del convenio [Q,m] de los callbacks del campo. Un predicado debe seleccionar
-la frontera geométrica pretendida, teniendo en cuenta la tolerancia de la malla.
-Las etiquetas desconocidas o vacías producen un error al usarlas.
-La malla no se debe modificar después de crear el espacio FEM.
+La etiqueta reservada `"all"` existe siempre. El objeto valida rango local,
+incidencias, caras y adyacencias de dominios de dimensión completa. El usuario debe
+suministrar un complejo conforme; detectar todas las intersecciones globales entre
+simplejos distantes queda fuera del contrato.
 
-dirichlet contiene una tupla de nombres **por componente**. Por ejemplo:
+La cuadratura usa un mapa de Duffy y reglas de Gauss-Jacobi en el simplejo de referencia.
+No contiene tablas específicas para 1D, 2D o 3D. Se puede reemplazar con
+`quadrature_rule(dimension, order)`, que devuelve coordenadas baricéntricas y pesos.
+`max_quadrature_points` exige que los costes grandes se autoricen explícitamente.
+
+## Una forma débil completa
+
+`weak(u,v,dx,ds)` se ejecuta una vez para construir una expresión. Cada integrando debe
+ser escalar y lineal en `v`; la dependencia en `u` puede ser no lineal.
 
 ```python
-problem = Problem(2, volume_coupled, dirichlet=(("all",), ("left",)))
+def weak(u, v, dx, ds):
+    x = dx.x
+    normal = ds.normal
+    volume = -(1 + sin(x[0]) ** 2) * inner(grad(u), grad(v)) * dx
+    boundary = (2 + inner(normal, normal)) * u * v * ds("wall")
+    return volume + boundary
 ```
 
-Las condiciones esenciales de esta versión son homogéneas. Si se omite
-dirichlet, todas las componentes usan el espacio sin restricciones esenciales.
-La ausencia de un callback de frontera significa contribución natural nula.
-Los datos Dirichlet no homogéneos necesitan un levantamiento; no se implementan
-mediante asignaciones posteriores a los modos.
+`dx` integra en todos los simplejos. `ds("name")` integra en las caras etiquetadas y
+`ds` sin etiqueta equivale a `ds("all")`. `dx.x` son las coordenadas espaciales y
+`ds.normal` es la normal exterior; en un complejo embebido es la conormal unitaria
+dentro del simplejo padre.
 
-## Componentes y truncamiento
+Se proporcionan `grad`, `inner`, `stack`, `sin`, `cos`, `exp`, `log`, `sqrt` y `tanh`,
+además de aritmética, potencias escalares e indexación. `grad` puede componerse para
+solicitar derivadas superiores de la base. La conformidad Sobolev necesaria para una
+forma concreta sigue siendo una propiedad de la base elegida.
 
-modes=8 solicita ocho modos para **cada** componente. Para d=3 devuelve N=24.
-modes=(8,6,4) fija N=18 con distinto truncamiento por componente. No confundir N
-con la cantidad de nodos, grados FEM escalares, coordenadas espaciales o componentes.
+## Bases suministradas por el usuario
+
+Una base implementa:
 
 ```python
-basis = GalerkinBasis.build(space, problem, modes=(8, 6))
-print(basis.dimension)  # 14
-print(basis.slices)  # bloques de coeficientes por componente
-print(basis.diagnostics())  # ortonormalidad, residuos y frontera
+class MyBasis:
+    dimension = N
+    value_shape = ()
+
+    def evaluate(self, points, *, order=0, cells=None, barycentric=None):
+        # [Q,N,*value_shape,*([ambient_dimension] * order)]
+        ...
 ```
 
-Cada modes[r] debe ser positivo y no superar los grados de libertad libres de
-esa componente. Para resolver más modos puede ser necesario refinar la malla.
-Los modos nulos de Neumann se incluyen y cuentan dentro del truncamiento.
-Si un corte divide un autoespacio múltiple, el subespacio seleccionado no tiene
-una orientación canónica: guardar la base es esencial para reproducir coordenadas.
+El paquete incluye cuatro construcciones:
 
-## Forma débil y formas de los tensores
+- `CallableBasis`: funciones Python diferenciables; deriva automáticamente con
+  `torch.func` o acepta derivadas explícitas.
+- `PolynomialBasis`: monomios de grado total o exponentes elegidos, en cualquier
+  dimensión.
+- `FiniteElementBasis`: Lagrange nodal continuo de grado arbitrario sobre simplejos.
+- `ComponentBasis`: copias escalares para campos vectoriales o tensoriales.
 
-| Objeto | Forma |
-|---|---|
-| Z | [B,N], o [N] para una evaluación individual. |
-| x | [Q,m]. |
-| u | [B,d,Q]. |
-| grad_u | [B,d,Q,m]. |
-| f0 | [B,d,Q], o escalar/tensor compatible por broadcasting. |
-| f1 | [B,d,Q,m], o escalar/tensor compatible por broadcasting. |
-| normal, sólo en frontera | [Q,m]. |
-| Resultado G(Z) | La misma forma de coeficientes que Z. |
+`TransformedBasis` aplica una combinación lineal a cualquier base. Por ejemplo,
+`problem.orthonormalize(basis)` devuelve coordenadas ortonormales numéricamente en L2.
 
-El callback volume(x,u,grad_u) devuelve (f0,f1). Para difusión con coeficientes
-por componente, construir el vector de coeficientes con forma [1,d,1,1].
-Los callbacks deben preservar la independencia del lote: no promediar ni reducir
-sobre B. El paquete no puede verificar esta propiedad para una función arbitraria.
+Para una base Lagrange se pueden entregar coeficientes
+`[grados_globales,N,*value_shape]`. Sus columnas pueden codificar condiciones de
+frontera, periodicidad, restricciones de divergencia, acoplamiento entre componentes
+o cualquier otro subespacio lineal construido externamente.
 
-Las contribuciones naturales se suministran como boundary={nombre: callback}:
+## Significado de G
+
+Para `z` de forma `[N]` o `[B,N]`, la base define
+
+```text
+u_z = sum_j z_j phi_j.
+```
+
+Si la base no es ortonormal, el campo resuelve
+
+```text
+M G(z) = (a(u_z; phi_1), ..., a(u_z; phi_N)),
+M_ij = (phi_j, phi_i)_L2.
+```
+
+Por ello `G(z)` contiene la velocidad de los coeficientes de `u_z`. El paquete evalúa
+este campo y conserva autograd respecto de `z`; no integra una evolución temporal.
+`mass_matrix` permite suministrar otra matriz de Gram simétrica positiva definida.
+
+## Campos vectoriales y tensoriales
 
 ```python
-def robin(x, u, grad_u, normal):
-    return -2.0 * u
+scalar = PolynomialBasis(dimension=p, degree=3)
+basis = ComponentBasis(scalar, components=2)
 
 
-problem = Problem(1, volume, boundary={"all": robin})
+def weak(u, v, dx, ds):
+    reaction = (u[0] - u[0] ** 3 - u[1]) * v[0]
+    reaction += 0.25 * (u[0] - u[1]) * v[1]
+    return reaction * dx - 0.1 * inner(grad(u), grad(v)) * dx
 ```
 
-Cada callback devuelve la densidad multiplicada por el valor de la función de
-prueba; el paquete realiza la integral. Si varias etiquetas se solapan, sus
-contribuciones **se suman**, de manera intencional. No se deduplican términos
-físicos. Los valores del callback de una componente esencial no cambian sus
-grados de libertad: las funciones de prueba ya tienen traza cero allí.
+`value_shape` puede tener cualquier cantidad de ejes. `inner` contrae todos los ejes
+del valor físico y deja libres lote, modo de prueba y cuadratura.
 
-Las funciones pueden depender de x, u y grad_u y de parámetros capturados por
-una función o un objeto callable. Deben devolver tensores con el mismo dispositivo
-y dtype que los estados. Para constantes nuevas usar u.new_tensor(...), o
-escalares Python. G no mueve automáticamente los parámetros externos del usuario.
-
-## Dispositivos y derivadas
+## Precisión, memoria y dispositivo
 
 ```python
-G = GalerkinField(basis, problem, device="cuda", dtype=torch.float64)
-Z = torch.zeros(16, basis.dimension, device=G.device, dtype=G.dtype, requires_grad=True)
-Y = G(Z)
-(gradient,) = torch.autograd.grad(Y.square().sum(), Z)
+G = problem.field(
+    basis=basis,
+    quadrature_order=8,
+    device="cuda",
+    dtype=torch.float64,
+    max_quadrature_points=2_000_000,
+)
 ```
 
-G.to(device=...,dtype=...) mueve sus tablas **en el mismo objeto** y devuelve G.
-Se admiten float64 y float32; float64 es el valor inicial para verificaciones.
-La base FEM se prepara y guarda en CPU/float64. Se conservan las derivadas de
-PyTorch con respecto a Z y a los parámetros de callbacks que mantengan su grafo.
-No se diferencia a través de la malla ni del cálculo de autovectores de SciPy.
+La cuadratura define también la matriz de Gram cuando no se suministra `mass_matrix`.
+Una matriz no positiva definida produce un error: suele indicar dependencia lineal,
+cuadratura insuficiente o una base que no pertenece a la geometría. La evaluación
+divide automáticamente los modos de prueba para respetar `max_intermediate_entries`.
 
-G.reconstruct(Z) devuelve valores y gradientes en cuadratura, conservando siempre
-el eje B. G.quadrature_points() devuelve una copia de los puntos físicos.
-G.table_bytes informa la memoria de las tablas, sin incluir estados y temporales.
-La memoria depende de Q, N y m; para lotes grandes se puede evaluar por bloques
-de estados desde el código llamador.
+`G.to(device=..., dtype=...)` mueve las tablas. Los tensores externos capturados por
+la forma son responsabilidad del usuario. Se admiten `float32` y `float64`.
 
-## Guardar y reutilizar la base
+## Persistencia
 
-```python
-from ngfield import save_basis, load_basis
+`FiniteElementBasis.save(path)` conserva geometría, etiquetas, numeración y coeficientes
+en NPZ sin pickle. `FiniteElementBasis.load(path)` restaura la misma base. Una
+`CallableBasis` contiene código Python y no se serializa como datos ejecutables.
 
-save_basis("base.npz", basis)
-restored = load_basis("base.npz")
-G = GalerkinField(restored, problem, quadrature_order=8)
-```
-
-El archivo conserva malla, etiquetas, numeración de grados de libertad, modos,
-valores propios y metadatos de versión. La carga exige la misma versión de
-scikit-fem y verifica numeración, condiciones esenciales y matriz de Gram.
-No recalcula los modos, no usa pickle y no ejecuta código del problema.
-Para reproducir un experimento completo, conservar también el código y parámetros
-del callback, el orden de cuadratura, las versiones instaladas y los estados usados.
-Los archivos existentes se protegen salvo overwrite=True.
-
-La base puede reutilizarse con otra acción débil que comparta componentes y
-condiciones esenciales. Los nombres esenciales normalizados deben coincidir.
-La cuadratura del campo puede refinarse sin modificar la masa ni los coeficientes.
-
-## Verificación y rendimiento
-
-```bash
-python -m pytest
-python examples/diffusion.py
-python examples/reaction_diffusion.py
-python benchmarks/field_evaluation.py --device cpu --output outputs/benchmark.json
-```
-
-Los ejemplos usan dominios no rectangulares. La suite incluye pruebas de malla,
-espectro, forma débil, frontera, lotes, autograd, persistencia y refinamiento.
-En una máquina CUDA, la prueba marcada cuda se ejecuta; en CI CPU se omite.
-El benchmark separa preparación y evaluación, sincroniza CUDA para medir tiempo
-y registra versiones. El muestreo, la preparación y las pruebas no integran tiempo.
-
-## Alcance inicial
-
-Implementado: H = L²(Ω;ℝᵈ), geometrías afines malladas en 1D–3D, FEM continuo
-P1/P2, fronteras esenciales homogéneas por componente, modos del Laplaciano,
-acciones locales volumétricas con valores/primeras derivadas y cargas naturales
-de frontera, evaluación CPU/CUDA y persistencia de la base.
-
-Requieren extensiones específicas: espacios con otra métrica, condiciones
-periódicas por identificación de grados, geometría curvilínea de orden alto,
-levantamientos no homogéneos, formas no locales, derivadas de orden superior y
-espacios restringidos como campos de divergencia nula. Estas variantes no se
-interpretan silenciosamente como el problema implementado.
+La API 0.1 basada en `Domain`, `FEMSpace`, `Problem` y `GalerkinBasis` se conserva por
+compatibilidad. Los nuevos desarrollos deben usar `GalerkinProblem` y una base explícita.
