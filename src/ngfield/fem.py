@@ -61,7 +61,7 @@ class FEMSpace:
 
     @property
     def ndofs(self) -> int:
-        return self.basis.N
+        return int(self.basis.N)
 
     def essential_dofs(self, names) -> np.ndarray:
         facets = self.domain.facets(names)
