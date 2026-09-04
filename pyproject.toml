@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "numerical-galerkin-field"
+version = "0.1.0"
+description = "Direct weak Galerkin vector fields on finite-element spectral bases"
+requires-python = ">=3.11"
+dependencies = [
+  "numpy>=1.26,<3",
+  "scipy>=1.12,<2",
+  "scikit-fem>=12,<13",
+  "meshio>=5.3,<6",
+  "torch>=2.4,<3",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10", "ruff>=0.9,<1", "build>=1.2,<2"]
+
+[project.urls]
+Repository = "https://github.com/cmurillos/Numerical-Galerkin-Field"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ngfield"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = ["cuda: requires a CUDA-capable PyTorch installation"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
