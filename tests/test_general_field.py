@@ -102,7 +102,12 @@ def test_numerical_orthonormalization_preserves_physical_functions():
     basis = PolynomialBasis(2, degree=2)
     orthonormal = problem.orthonormalize(basis, quadrature_order=5)
     field = problem.field(basis=orthonormal, quadrature_order=5)
-    torch.testing.assert_close(field.mass_matrix, torch.eye(basis.dimension), atol=1e-10, rtol=0)
+    torch.testing.assert_close(
+        field.mass_matrix,
+        torch.eye(basis.dimension, dtype=field.dtype),
+        atol=1e-10,
+        rtol=0,
+    )
     z = torch.randn(basis.dimension, dtype=field.dtype)
     torch.testing.assert_close(field(z), z, atol=1e-10, rtol=0)
 
