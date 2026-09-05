@@ -583,3 +583,90 @@ La implementación debe verificar al menos:
 7. ejecución en `float32`, `float64`, CPU y, cuando esté disponible, CUDA;
 8. rechazo de entradas con dimensión, tipo, precisión o dispositivo incompatibles.
 
+## D-007 — Contrato de cuadratura
+
+**Estado:** aceptada.
+
+### Interfaz única
+
+La cuadratura del campo se controla con un solo argumento opcional:
+
+```python
+G = problem.field(basis=basis)                    # automática
+G = problem.field(basis=basis, quadrature=10)     # orden fijo
+G = problem.field(basis=basis, quadrature=1e-8)   # tolerancia adaptativa
+```
+
+Un entero no negativo representa el grado polinómico que la regla debe integrar
+exactamente en cada simplejo de referencia. Un número real estrictamente entre cero y
+uno representa una tolerancia. Los booleanos, los reales mayores o iguales que uno y
+las cadenas se rechazan para que ninguna entrada tenga dos interpretaciones posibles.
+
+`quadrature_order` y `quadrature_rule` no forman parte de la interfaz general de
+`problem.field`. El método geométrico de bajo nivel puede seguir recibiendo una regla
+de referencia personalizada, pero esta posibilidad no complica el uso normal del
+campo.
+
+### Selección automática
+
+Si `quadrature` se omite, la biblioteca inspecciona la base y el árbol de la forma
+débil. Cuando ambos son polinómicos a trozos, calcula el grado del integrando completo,
+incluidos estado, función de prueba, derivadas, coordenadas y coeficientes nodales, y
+elige un orden exacto no menor que el recomendado para validar la base.
+
+Una base programable, un `Coefficient(function)`, `pointwise`, una división por una
+expresión espacial o funciones como `sin` y `exp` pueden impedir esa inferencia. En ese
+caso se usa automáticamente la tolerancia `1e-8` en `float64` y `5e-5` en `float32`.
+
+### Adaptación durante la construcción
+
+La adaptación prueba los órdenes `q, q+2, ...`, comenzando en el orden de validación de
+la base. Para cada candidato evalúa el campo en un conjunto determinista y acotado de
+estados de calibración dentro de la bola unitaria de coeficientes. Se detiene cuando
+
+```text
+max |G_q2(z)-G_q(z)| / (1+|G_q2(z)|) <= tolerance
+```
+
+en todos esos estados y componentes. Se consideran conjuntamente todas las integrales
+de volumen y de frontera. El orden máximo interno es 64 y se conserva el límite
+`max_quadrature_points`; si se alcanza alguno antes de converger, la construcción falla
+explícitamente en vez de aceptar una integral no verificada.
+
+La adaptación sólo refina el orden de integración sobre cada simplejo afín. No modifica
+la malla, no subdivide elementos y no cambia ni reortonormaliza la base.
+
+Esta comparación es una estimación numérica sobre los estados de calibración, no una
+cota uniforme para una forma no lineal arbitraria en todo `R^N`. Tal cota no puede
+deducirse de una tolerancia sin hipótesis adicionales sobre el operador y el conjunto
+de estados. Cuando se requiera control fuera de esa escala, el usuario debe fijar y
+validar un orden entero apropiado para el problema.
+
+### Inmutabilidad operacional
+
+Toda adaptación ocurre al construir `G`. Después quedan fijos los puntos, pesos,
+coeficientes tabulados y valores de la base. En particular, llamar `G(z)` nunca cambia
+la cuadratura. Esto conserva el campo autónomo acordado en D-006 y su compatibilidad
+con lotes, `torch.func` y autograd.
+
+El resultado registra:
+
+```text
+quadrature_mode             fixed | automatic-exact | adaptive | automatic-adaptive
+quadrature_order            orden finalmente usado
+quadrature_tolerance        tolerancia solicitada, o None
+quadrature_error_estimate   última diferencia escalada, 0 o None
+```
+
+### Criterios de aceptación de D-007
+
+La implementación debe verificar al menos:
+
+1. inferencia de un orden suficiente para formas polinómicas a trozos;
+2. adaptación de formas que contienen funciones no polinómicas;
+3. selección inequívoca mediante `None`, un entero o una tolerancia real;
+4. coincidencia del resultado adaptativo con una regla fija refinada;
+5. conservación del orden y de las tablas después de construir `G`;
+6. registro del modo, orden, tolerancia y error estimado;
+7. fallo explícito al agotar el orden o el presupuesto de puntos;
+8. aplicación conjunta a integrales de volumen y de frontera.

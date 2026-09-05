@@ -1,12 +1,15 @@
 """General weak Galerkin fields on user-supplied bases and simplicial domains."""
 
 from dataclasses import dataclass
+from numbers import Integral, Real
 
 import torch
 
 from .forms import build_form, coefficient_expressions, derivative_orders, evaluate
 from .geometry import SimplicialDomain, positive_integer
 from .spaces import TransformedBasis
+
+_MAX_ADAPTIVE_ORDER = 64
 
 
 @dataclass
@@ -124,6 +127,95 @@ def _tolerance(value, dtype=torch.float64):
     return float(value)
 
 
+def _basis_polynomial_degree(basis):
+    """Return the local polynomial degree, or ``None`` when it is unknown."""
+    from .spaces import ComponentBasis, FiniteElementBasis, PolynomialBasis, ProductBasis
+
+    if isinstance(basis, FiniteElementBasis):
+        return basis.degree
+    if isinstance(basis, PolynomialBasis):
+        return int(basis.exponents.sum(axis=1).max())
+    if isinstance(basis, (TransformedBasis, ComponentBasis)):
+        return _basis_polynomial_degree(basis.base)
+    if isinstance(basis, ProductBasis):
+        degrees = [_basis_polynomial_degree(item) for item in basis.bases]
+        return None if any(degree is None for degree in degrees) else max(degrees)
+    return None
+
+
+def _expression_polynomial_degree(expression, basis_degree):
+    """Infer a cellwise spatial degree for expressions supported by exact quadrature."""
+    op = expression.op
+    if op in ("u", "v"):
+        return max(0, basis_degree - len(expression.data))
+    if op == "x":
+        return 1
+    if op in ("constant", "normal"):
+        return 0
+    if op == "coefficient":
+        return {"cell": 0, "vertex": 1}.get(expression.location)
+
+    degrees = [
+        _expression_polynomial_degree(argument, basis_degree) for argument in expression.args
+    ]
+    if op in ("add", "sub", "stack"):
+        return None if any(degree is None for degree in degrees) else max(degrees, default=0)
+    if op in ("mul", "inner", "contract", "outer"):
+        return None if any(degree is None for degree in degrees) else sum(degrees)
+    if op == "div":
+        return degrees[0] if degrees[1] == 0 else None
+    if op == "pow":
+        power = expression.data
+        if power == 0 or degrees[0] == 0:
+            return 0
+        if isinstance(power, Real) and float(power).is_integer() and power >= 0:
+            return None if degrees[0] is None else int(power) * degrees[0]
+        return None
+    if op in ("neg", "index", "transpose", "trace"):
+        return degrees[0]
+    if op == "pointwise" or op in ("exp", "sin", "cos", "tanh", "log", "sqrt"):
+        return 0 if all(degree == 0 for degree in degrees) else None
+    return None
+
+
+def _exact_quadrature_order(form, basis):
+    degree = _basis_polynomial_degree(basis)
+    if degree is None:
+        return None
+    degrees = [
+        _expression_polynomial_degree(integral.integrand, degree) for integral in form.integrals
+    ]
+    return None if any(value is None for value in degrees) else max(degrees, default=0)
+
+
+def _quadrature_specification(quadrature, dtype):
+    if quadrature is None:
+        return "automatic", _tolerance(None, dtype)
+    if isinstance(quadrature, bool):
+        raise TypeError("quadrature must be an integer order or a real tolerance in (0,1).")
+    if isinstance(quadrature, Integral):
+        return "fixed", positive_integer(quadrature, "quadrature", 0)
+    if isinstance(quadrature, Real) and 0 < float(quadrature) < 1:
+        return "adaptive", float(quadrature)
+    raise ValueError(
+        "quadrature must be an integer order >= 0 or a real tolerance strictly between 0 and 1."
+    )
+
+
+def _calibration_states(dimension, *, device, dtype):
+    """Small deterministic sample of the coefficient unit ball used during preparation."""
+    indices = torch.linspace(0, dimension - 1, min(dimension, 8), device=device)
+    indices = torch.unique(indices.round().to(torch.long))
+    axes = torch.zeros((len(indices), dimension), dtype=dtype, device=device)
+    axes[torch.arange(len(indices), device=device), indices] = 1
+    dense = torch.linspace(-1.0, 1.0, dimension, dtype=dtype, device=device)
+    dense = dense / torch.linalg.vector_norm(dense).clamp_min(1)
+    uniform = torch.full((dimension,), dimension**-0.5, dtype=dtype, device=device)
+    return torch.cat(
+        (torch.zeros((1, dimension), dtype=dtype, device=device), axes, dense[None], uniform[None])
+    )
+
+
 class GalerkinProblem:
     """A simplicial geometry plus one complete weak form.
 
@@ -184,8 +276,7 @@ class GalerkinProblem:
         self,
         *,
         basis,
-        quadrature_order=None,
-        quadrature_rule=None,
+        quadrature=None,
         max_quadrature_points=1_000_000,
         max_intermediate_entries=10_000_000,
         device="cpu",
@@ -194,8 +285,7 @@ class GalerkinProblem:
         return GalerkinField(
             self,
             basis,
-            quadrature_order=quadrature_order,
-            quadrature_rule=quadrature_rule,
+            quadrature=quadrature,
             max_quadrature_points=max_quadrature_points,
             max_intermediate_entries=max_intermediate_entries,
             device=device,
@@ -310,8 +400,7 @@ class GalerkinField:
         problem,
         basis,
         *,
-        quadrature_order=None,
-        quadrature_rule=None,
+        quadrature=None,
         max_quadrature_points=1_000_000,
         max_intermediate_entries=10_000_000,
         device="cpu",
@@ -320,9 +409,6 @@ class GalerkinField:
         if dtype not in (torch.float32, torch.float64):
             raise ValueError("Use torch.float32 or torch.float64.")
         value_shape = _basis_contract(problem, basis)
-        if quadrature_order is None:
-            quadrature_order = getattr(basis, "quadrature_order", 4)
-        quadrature_order = positive_integer(quadrature_order, "quadrature_order", 0)
         max_quadrature_points = positive_integer(max_quadrature_points, "max_quadrature_points")
         self.max_intermediate_entries = positive_integer(
             max_intermediate_entries, "max_intermediate_entries"
@@ -335,17 +421,48 @@ class GalerkinField:
         volume_orders = {"all": {0}}
         for name, orders in required["volume"].items():
             volume_orders.setdefault(name, set()).update(orders)
+        self._table_requirements = (volume_orders, required["boundary"], coefficients)
+        self._table_options = (max_quadrature_points, device, dtype)
+
+        mode, target = _quadrature_specification(quadrature, dtype)
+        baseline = positive_integer(
+            getattr(basis, "validation_order", getattr(basis, "quadrature_order", 4)),
+            "basis quadrature order",
+            0,
+        )
+        exact = _exact_quadrature_order(self.form, basis) if mode == "automatic" else None
+        if mode == "fixed":
+            self._prepare(target)
+            self.quadrature_mode = "fixed"
+            self.quadrature_tolerance = None
+            self.quadrature_error_estimate = None
+        elif exact is not None:
+            self._prepare(max(baseline, exact))
+            self.quadrature_mode = "automatic-exact"
+            self.quadrature_tolerance = None
+            self.quadrature_error_estimate = 0.0
+        else:
+            tolerance = target
+            self._prepare_adaptive(baseline, tolerance)
+            self.quadrature_mode = "automatic-adaptive" if mode == "automatic" else "adaptive"
+            self.quadrature_tolerance = tolerance
+
+        del self._table_requirements, self._table_options
+
+    def _prepare(self, order):
+        volume_orders, boundary_orders, coefficients = self._table_requirements
+        max_points, device, dtype = self._table_options
         self._volumes = {
             name: _table(
-                problem.geometry,
-                basis,
+                self.problem.geometry,
+                self.basis,
                 orders,
                 coefficients["volume"].get(name, set()),
-                quadrature_order,
+                order,
                 None,
                 None if name == "all" else name,
-                quadrature_rule,
-                max_quadrature_points,
+                None,
+                max_points,
                 device,
                 dtype,
             )
@@ -354,19 +471,19 @@ class GalerkinField:
         self._volume = self._volumes["all"]
         self._boundary = {
             name: _table(
-                problem.geometry,
-                basis,
+                self.problem.geometry,
+                self.basis,
                 orders,
                 coefficients["boundary"].get(name, set()),
-                quadrature_order,
+                order,
                 name,
                 None,
-                quadrature_rule,
-                max_quadrature_points,
+                None,
+                max_points,
                 device,
                 dtype,
             )
-            for name, orders in required["boundary"].items()
+            for name, orders in boundary_orders.items()
         }
         mass = _gram(self._volume)
         tolerance = _tolerance(None, dtype)
@@ -381,6 +498,41 @@ class GalerkinField:
             )
         self.mass_matrix = mass
         self.orthonormality_error = float(error)
+        self.quadrature_order = order
+
+    def _prepare_adaptive(self, initial_order, tolerance):
+        if initial_order > _MAX_ADAPTIVE_ORDER:
+            raise ValueError(
+                f"The basis requires order {initial_order}, above the adaptive limit "
+                f"{_MAX_ADAPTIVE_ORDER}. Use a fixed integer order."
+            )
+        probes = _calibration_states(
+            self.dimension, device=self._table_options[1], dtype=self._table_options[2]
+        )
+        previous = None
+        for order in range(initial_order, _MAX_ADAPTIVE_ORDER + 1, 2):
+            try:
+                self._prepare(order)
+            except ValueError as exc:
+                if "exceeds max_points" in str(exc):
+                    raise ValueError(
+                        "Adaptive quadrature exhausted max_quadrature_points before reaching "
+                        f"tolerance {tolerance:.3e}. Use a fixed integer order or increase the budget."
+                    ) from exc
+                raise
+            with torch.no_grad():
+                current = self(probes)
+            if previous is not None:
+                scaled = torch.abs(current - previous) / (1 + torch.abs(current))
+                error = float(torch.max(scaled).item())
+                if error <= tolerance:
+                    self.quadrature_error_estimate = error
+                    return
+            previous = current
+        raise ValueError(
+            f"Adaptive quadrature did not reach tolerance {tolerance:.3e} by order "
+            f"{_MAX_ADAPTIVE_ORDER}. Use a fixed integer order."
+        )
 
     @property
     def device(self):
@@ -456,8 +608,13 @@ class GalerkinField:
                 "device": self.device,
             }
             values = evaluate(integral.integrand, context, caches[key])
-            if values.shape != (len(z), test.stop - test.start, len(table.points)):
-                raise ValueError("A weak integrand did not evaluate to [batch,test,quadrature].")
+            expected = (len(z), test.stop - test.start, len(table.points))
+            try:
+                values = torch.broadcast_to(values, expected)
+            except RuntimeError as exc:
+                raise ValueError(
+                    "A weak integrand must broadcast to [batch,test,quadrature]."
+                ) from exc
             result = result + torch.einsum("bjq,q->bj", values, table.weights)
         return result
 

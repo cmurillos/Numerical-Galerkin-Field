@@ -20,7 +20,7 @@ def main():
         weak=weak,
     )
     basis = problem.basis("laplacian", size=3)
-    field = problem.field(basis=basis, quadrature_order=6)
+    field = problem.field(basis=basis, quadrature=6)
     z = torch.tensor([0.1, -0.2, 0.3], dtype=field.dtype, requires_grad=True)
     result = field(z)
     result.square().sum().backward()

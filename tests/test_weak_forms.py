@@ -31,7 +31,7 @@ def interval_problem(coefficient, *, vertices=None, simplices=None, boundary=Fal
 
     problem = GalerkinProblem(vertices=vertices, simplices=simplices, weak=weak)
     basis = problem.orthonormalize(FiniteElementBasis(problem.geometry), quadrature_order=4)
-    return problem.field(basis=basis, quadrature_order=4)
+    return problem.field(basis=basis, quadrature=4)
 
 
 def test_callable_and_vertex_coefficients_match_exact_linear_field_and_are_fixed():
@@ -94,7 +94,7 @@ def test_anisotropic_tensor_coefficient_and_matmul_match_exact_stiffness():
 
     problem = GalerkinProblem(vertices=vertices, simplices=[[0, 1, 2]], weak=weak)
     basis = problem.orthonormalize(PolynomialBasis(2, degree=1), quadrature_order=2)
-    field = problem.field(basis=basis, quadrature_order=2)
+    field = problem.field(basis=basis, quadrature=2)
     z = torch.tensor([0.1, -0.3, 0.4], dtype=torch.float64)
     gradients = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=torch.float64)
     stiffness = 0.5 * gradients @ tensor @ gradients.T
@@ -118,7 +118,7 @@ def test_nd_tensor_operators_and_pointwise_preserve_batches_and_autograd():
     problem = GalerkinProblem(vertices=vertices, simplices=[[0, 1, 2]], weak=weak)
     scalar = problem.basis("polynomial", size=3)
     basis = ComponentBasis(scalar, components=2)
-    field = problem.field(basis=basis, quadrature_order=6)
+    field = problem.field(basis=basis, quadrature=6)
     z = torch.randn(4, basis.dimension, dtype=torch.float64, requires_grad=True)
     result = field(z)
     assert result.shape == z.shape

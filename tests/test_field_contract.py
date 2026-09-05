@@ -14,7 +14,7 @@ def nonlinear_field():
         weak=weak,
     )
     basis = problem.basis("laplacian", size=3)
-    return problem.field(basis=basis, quadrature_order=6)
+    return problem.field(basis=basis, quadrature=6)
 
 
 @pytest.mark.parametrize("batch_shape", [(), (5,), (2, 3), (2, 1, 3)])

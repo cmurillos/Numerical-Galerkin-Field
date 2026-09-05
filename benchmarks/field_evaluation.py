@@ -27,7 +27,7 @@ def main():
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--batch-sizes", type=int, nargs="+", default=[1, 16, 64])
     parser.add_argument("--modes", type=int, nargs="+", default=[8, 16])
-    parser.add_argument("--quadrature-order", type=int, default=6)
+    parser.add_argument("--quadrature", type=int, default=6)
     parser.add_argument("--repeats", type=int, default=10)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
@@ -46,7 +46,7 @@ def main():
         basis = problem.basis("laplacian", size=modes, degree=1)
         synchronize(device)
         start = time.perf_counter()
-        field = problem.field(basis=basis, quadrature_order=args.quadrature_order, device=device)
+        field = problem.field(basis=basis, quadrature=args.quadrature, device=device)
         synchronize(device)
         preparation = time.perf_counter() - start
         for batch_size in args.batch_sizes:

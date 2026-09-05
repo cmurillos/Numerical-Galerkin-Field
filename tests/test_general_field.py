@@ -31,7 +31,7 @@ def test_p1_diffusion_matches_exact_matrices_in_nd(dimension):
     problem = GalerkinProblem(vertices=vertices, simplices=cells, weak=weak)
     raw_basis = FiniteElementBasis(problem.geometry)
     basis = problem.orthonormalize(raw_basis, quadrature_order=2)
-    field = problem.field(basis=basis, quadrature_order=2)
+    field = problem.field(basis=basis, quadrature=2)
     volume = 1 / math.factorial(dimension)
     gradients = np.vstack((-np.ones(dimension), np.eye(dimension)))
     stiffness = volume * gradients @ gradients.T
@@ -57,7 +57,7 @@ def test_complete_form_contains_volume_boundary_coordinates_and_normal():
 
     problem = GalerkinProblem(vertices=vertices, simplices=cells, boundaries=boundaries, weak=weak)
     basis = problem.basis("laplacian", size=3)
-    field = problem.field(basis=basis, quadrature_order=6)
+    field = problem.field(basis=basis, quadrature=6)
     z = torch.tensor([0.2, -0.1, 0.3], dtype=field.dtype)
     assert field(z).shape == z.shape
     assert torch.isfinite(field(z)).all()
@@ -75,7 +75,7 @@ def test_nonlinear_vector_field_and_batches():
     problem = GalerkinProblem(vertices=vertices, simplices=cells, weak=weak)
     scalar = problem.basis("polynomial", size=3)
     basis = ComponentBasis(scalar, components=2)
-    field = problem.field(basis=basis, quadrature_order=6)
+    field = problem.field(basis=basis, quadrature=6)
     z = torch.randn(7, basis.dimension, dtype=field.dtype, requires_grad=True)
     result = field(z)
     assert result.shape == z.shape
@@ -93,7 +93,7 @@ def test_callable_basis_derivatives_are_automatic():
 
     problem = GalerkinProblem(vertices=[[0.0], [1.0]], simplices=[[0, 1]], weak=weak)
     basis = problem.basis("custom", source=raw_basis, quadrature_order=8)
-    field = problem.field(basis=basis, quadrature_order=8)
+    field = problem.field(basis=basis, quadrature=8)
     assert torch.isfinite(field(torch.tensor([0.1, -0.2], dtype=field.dtype))).all()
 
 
@@ -147,7 +147,7 @@ def test_reusable_geometry_and_labeled_volume_measures():
     assert set(problem.regions) == {"all", "left", "right"}
     raw_basis = FiniteElementBasis(geometry)
     basis = problem.orthonormalize(raw_basis, quadrature_order=2)
-    field = problem.field(basis=basis, quadrature_order=2)
+    field = problem.field(basis=basis, quadrature=2)
     z = torch.tensor([0.2, -0.1, 0.4], dtype=field.dtype)
     left = torch.tensor([[1 / 6, 1 / 12, 0], [1 / 12, 1 / 6, 0], [0, 0, 0]], dtype=field.dtype)
     right = torch.tensor([[0, 0, 0], [0, 1 / 6, 1 / 12], [0, 1 / 12, 1 / 6]], dtype=field.dtype)
@@ -178,7 +178,7 @@ def test_numerical_orthonormalization_preserves_physical_functions():
     problem = GalerkinProblem(vertices=vertices, simplices=cells, weak=weak)
     basis = PolynomialBasis(2, degree=2)
     orthonormal = problem.orthonormalize(basis, quadrature_order=5)
-    field = problem.field(basis=orthonormal, quadrature_order=5)
+    field = problem.field(basis=orthonormal, quadrature=5)
     torch.testing.assert_close(
         field.mass_matrix,
         torch.eye(basis.dimension, dtype=field.dtype),

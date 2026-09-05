@@ -23,7 +23,7 @@ def main():
         weak=weak,
     )
     basis = problem.basis("laplacian", size=5, degree=1)
-    field = problem.field(basis=basis, quadrature_order=4)
+    field = problem.field(basis=basis, quadrature=4)
     z = torch.linspace(-0.2, 0.2, basis.dimension, dtype=field.dtype)
     result = field(z)
     print(

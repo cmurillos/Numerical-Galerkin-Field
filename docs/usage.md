@@ -80,9 +80,18 @@ dimensión intrínseca es dos, la ambiente es tres y su frontera exterior es vac
 ejemplo completo está en `examples/embedded_torus.py`.
 
 La cuadratura usa un mapa de Duffy y reglas de Gauss-Jacobi en el simplejo de referencia.
-No contiene tablas específicas para 1D, 2D o 3D. Se puede reemplazar con
-`quadrature_rule(dimension, order)`, que devuelve coordenadas baricéntricas y pesos.
-`max_quadrature_points` exige que los costes grandes se autoricen explícitamente.
+No contiene tablas específicas para 1D, 2D o 3D. En el uso normal no hay que elegirla:
+
+```python
+G = problem.field(basis=basis)                   # automática
+G = problem.field(basis=basis, quadrature=10)    # fija
+G = problem.field(basis=basis, quadrature=1e-8)  # adaptativa
+```
+
+El modo automático infiere el orden cuando toda la forma es polinómica a trozos y se
+adapta durante la construcción para `sin`, `exp`, coeficientes programables y otras
+expresiones no polinómicas. Después, la regla queda fija: evaluar `G(z)` nunca cambia
+los nodos. `max_quadrature_points` impide que un coste grande se acepte silenciosamente.
 
 ## Una forma débil completa
 
@@ -355,7 +364,7 @@ del valor físico y deja libres lote, modo de prueba y cuadratura.
 ```python
 G = problem.field(
     basis=basis,
-    quadrature_order=8,
+    quadrature=8,
     device="cuda",
     dtype=torch.float64,
     max_quadrature_points=2_000_000,
