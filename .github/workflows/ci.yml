@@ -58,6 +58,7 @@ jobs:
         run: |
           python benchmarks/field_evaluation.py --batch-sizes 1 4 --modes 4 --repeats 2 --output outputs/benchmark.json
           python -m build
+          python -m twine check dist/*
       - name: Upload test report
         if: always()
         uses: actions/upload-artifact@v4

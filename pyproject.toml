@@ -1,12 +1,27 @@
 [build-system]
-requires = ["hatchling>=1.25"]
+requires = ["hatchling>=1.27,<1.32"]
 build-backend = "hatchling.build"
 
 [project]
 name = "numerical-galerkin-field"
-version = "0.8.0"
+version = "1.0.0"
 description = "General direct weak Galerkin fields on simplicial geometries"
+readme = "README.md"
 requires-python = ">=3.11"
+license = "BSD-3-Clause"
+license-files = ["LICENSE"]
+authors = [{ name = "Carlos Andrés Murillo" }]
+keywords = ["Galerkin", "finite elements", "weak formulations", "scientific computing"]
+classifiers = [
+  "Development Status :: 5 - Production/Stable",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: BSD License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Mathematics",
+]
 dependencies = [
   "numpy>=1.26,<3",
   "scipy>=1.12,<2",
@@ -16,13 +31,30 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8,<10", "ruff>=0.9,<1", "build>=1.2,<2"]
+dev = ["pytest>=8,<10", "ruff>=0.9,<1", "build>=1.2,<2", "twine>=5,<7"]
 
 [project.urls]
-Repository = "https://github.com/cmurillos/Numerical-Galerkin-Field"
+Homepage = "https://github.com/cmurillos/Numerical-Galerkin-Field"
+Documentation = "https://github.com/cmurillos/Numerical-Galerkin-Field/tree/main/docs"
+Source = "https://github.com/cmurillos/Numerical-Galerkin-Field"
+Issues = "https://github.com/cmurillos/Numerical-Galerkin-Field/issues"
+Changelog = "https://github.com/cmurillos/Numerical-Galerkin-Field/blob/main/CHANGELOG.md"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ngfield"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/src",
+  "/tests",
+  "/examples",
+  "/docs",
+  "/README.md",
+  "/LICENSE",
+  "/CITATION.cff",
+  "/CHANGELOG.md",
+  "/pyproject.toml",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
