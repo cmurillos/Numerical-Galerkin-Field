@@ -1,9 +1,10 @@
 # Interfaz general de Numerical Galerkin Field
 
-Esta guía describe la API disponible en 0.9.0. El
+Esta guía conserva el recorrido de 0.9.0 y documenta el descriptor `Space` añadido
+en esta rama. El
 [contrato D-013](design-contract.md#d-013--contrato-de-uso-con-espacio-admisible-explícito)
-registra el recorrido futuro con un espacio admisible explícito. `Space`, `ZeroTrace`
-y las nuevas llamadas allí ilustradas todavía no están implementados.
+registra el recorrido futuro completo. `ZeroTrace`, `V.basis` y la nueva construcción
+directa de `GalerkinField` todavía no están implementados.
 
 ## Problema mínimo
 
@@ -46,6 +47,48 @@ problem = GalerkinProblem(geometry=geometry, weak=weak)
 ```
 
 No se combinan `geometry` y los argumentos geométricos directos en una misma llamada.
+
+## Descripción del espacio admisible — D-013, parte 2
+
+Sobre un `SimplicialDomain` ya construido, se puede describir el espacio antes de
+elegir una base:
+
+```python
+from ngfield import Space
+
+V = Space(
+    geometry=geometry,
+    components=1,
+    regularity=1,
+    restrictions=[],
+)
+```
+
+Este ejemplo declara H1 escalar sobre la geometría, con producto de estados L2.
+`components` cuenta componentes físicas, independientemente de la dimensión del
+dominio o del espacio ambiente. `V.value_shape` es `(1,)` para una componente y `(c,)`
+para `c` componentes. Un toro superficial puede tener una componente y dimensiones
+intrínseca dos y ambiente tres, consultables en `V.geometry`.
+
+`regularity` declara un orden Sobolev entero no negativo, común a las componentes:
+cero para L2, uno para H1. Su valor por defecto es uno. Declarar un orden superior no
+construye ni certifica una base conforme de ese orden. El número de modos se decide
+después, al elegir la base, y no es una propiedad de este descriptor.
+
+`Space` conserva la geometría por referencia y no altera sus regiones, medidas ni
+fronteras. Sus atributos no se reasignan y la lista vacía de restricciones se copia
+como tupla. La geometría compartida debe mantenerse fija, igual que al construir una
+base o un campo.
+
+Las listas o tuplas de restricciones no vacías se rechazan explícitamente: su implementación
+pertenece a la parte 3. Sólo se admite `restrictions=[]` o `restrictions=()`; omitir el
+argumento equivale a la tupla vacía. Una etiqueta de frontera nunca impone por sí sola
+una restricción.
+
+Esta entrega proporciona la descripción del espacio. Para calcular un campo se sigue
+usando `GalerkinProblem` y una base explícitamente admisible; `V.basis` y su conexión
+directa con `GalerkinField` llegarán en las partes siguientes. Las bases escalares
+existentes con `value_shape=()` conservan su comportamiento.
 
 ## Geometría simplicial
 
