@@ -4,9 +4,9 @@ All notable changes to Numerical Galerkin Field are documented in this file.
 
 The project follows [Semantic Versioning](https://semver.org/).
 
-## [1.0.0] - 2026-09-05
+## [0.9.0] - 2026-09-05
 
-First stable release.
+First public beta release.
 
 ### Added
 
@@ -30,4 +30,4 @@ First stable release.
 - Curved elements, implicit solvers and IMEX solvers remain future extensions.
 - Numerical error methods are refinement indicators rather than certified bounds.
 
-[1.0.0]: https://github.com/cmurillos/Numerical-Galerkin-Field/releases/tag/v1.0.0
+[0.9.0]: https://github.com/cmurillos/Numerical-Galerkin-Field/releases/tag/v0.9.0

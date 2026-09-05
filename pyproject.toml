@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "numerical-galerkin-field"
-version = "1.0.0"
+version = "0.9.0"
 description = "General direct weak Galerkin fields on simplicial geometries"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -13,7 +13,7 @@ license-files = ["LICENSE"]
 authors = [{ name = "Carlos Andrés Murillo" }]
 keywords = ["Galerkin", "finite elements", "weak formulations", "scientific computing"]
 classifiers = [
-  "Development Status :: 5 - Production/Stable",
+  "Development Status :: 4 - Beta",
   "Intended Audience :: Science/Research",
   "License :: OSI Approved :: BSD License",
   "Operating System :: OS Independent",
