@@ -247,6 +247,14 @@ def _projection_exact_order(source, basis):
     return None if source_degree is None else basis_degree + source_degree
 
 
+def _projection_error_exact_order(source, basis):
+    basis_degree = _basis_polynomial_degree(basis)
+    if basis_degree is None or not isinstance(source, Coefficient):
+        return None
+    source_degree = {"cell": 0, "vertex": 1}.get(source.location)
+    return None if source_degree is None else 2 * max(basis_degree, source_degree)
+
+
 class GalerkinProblem:
     """A simplicial geometry plus one complete weak form.
 
@@ -840,7 +848,7 @@ class GalerkinField:
             self.dtype,
         )
 
-    def _project_on_table(self, source, table):
+    def _source_on_table(self, source, table):
         if isinstance(source, Coefficient):
             values = source.tabulate(
                 self.problem.geometry,
@@ -880,8 +888,24 @@ class GalerkinField:
         physical_size = prod(self.value_shape)
         flattened = values.reshape(batch_size, len(table.points), physical_size)
         modes = table.basis[0].reshape(len(table.points), self.dimension, physical_size)
+        return flattened, modes, batch_shape
+
+    def _project_on_table(self, source, table):
+        flattened, modes, batch_shape = self._source_on_table(source, table)
         result = torch.einsum("bqd,qnd,q->bn", flattened, modes, table.weights)
         return result.reshape((*batch_shape, self.dimension))
+
+    def _projection_error_on_table(self, source, table):
+        values, modes, batch_shape = self._source_on_table(source, table)
+        coordinates = torch.einsum("bqd,qnd,q->bn", values, modes, table.weights)
+        approximation = torch.einsum("bn,qnd->bqd", coordinates, modes)
+        squared = torch.einsum(
+            "bqd,bqd,q->b",
+            values - approximation,
+            values - approximation,
+            table.weights,
+        )
+        return torch.sqrt(torch.clamp_min(squared, 0)).reshape(batch_shape)
 
     def project(self, source, *, quadrature=None):
         """Return the L2 coordinates of a callable or ``Coefficient`` in the fixed basis."""
@@ -929,6 +953,88 @@ class GalerkinField:
             f"Adaptive projection did not reach tolerance {target:.3e} by order "
             f"{_MAX_ADAPTIVE_ORDER}. Use a fixed integer order."
         )
+
+    def projection_error(self, source, *, quadrature=None):
+        """Estimate ``||source - P_N source||_L2`` on the fixed geometry."""
+        if not isinstance(source, Coefficient) and not callable(source):
+            raise TypeError("projection_error expects a callable function or a Coefficient.")
+        mode, target = _quadrature_specification(quadrature, self.dtype)
+        exact = _projection_error_exact_order(source, self.basis) if mode == "automatic" else None
+        if mode == "fixed":
+            return self._projection_error_on_table(source, self._projection_table(target))
+        if exact is not None:
+            order = max(self._basis_quadrature_order, exact)
+            return self._projection_error_on_table(source, self._projection_table(order))
+
+        if self._basis_quadrature_order > _MAX_ADAPTIVE_ORDER:
+            raise ValueError(
+                f"The basis requires order {self._basis_quadrature_order}, above the adaptive "
+                f"limit {_MAX_ADAPTIVE_ORDER}. Use a fixed integer order."
+            )
+        previous = None
+        for order in range(self._basis_quadrature_order, _MAX_ADAPTIVE_ORDER + 1, 2):
+            try:
+                current = self._projection_error_on_table(
+                    source,
+                    self._projection_table(order),
+                )
+            except ValueError as exc:
+                if "exceeds max_points" in str(exc):
+                    raise ValueError(
+                        "Adaptive projection error exhausted max_quadrature_points before "
+                        f"reaching tolerance {target:.3e}. Use a fixed integer order."
+                    ) from exc
+                raise
+            if not current.numel():
+                raise ValueError(
+                    "Adaptive projection error cannot calibrate an empty batch; "
+                    "use a fixed integer order."
+                )
+            detached = current.detach()
+            if previous is not None:
+                if detached.shape != previous.shape:
+                    raise ValueError(
+                        "The projected function changed batch shape during adaptation."
+                    )
+                error = torch.max(torch.abs(detached - previous) / (1 + torch.abs(detached)))
+                if float(error.item()) <= target:
+                    return current
+            previous = detached
+        raise ValueError(
+            f"Adaptive projection error did not reach tolerance {target:.3e} by order "
+            f"{_MAX_ADAPTIVE_ORDER}. Use a fixed integer order."
+        )
+
+    def quadrature_error(self, z, *, order=None):
+        """Compare the reduced velocity with one assembled at a higher fixed order."""
+        self._states(z)
+        if not torch.isfinite(z).all():
+            raise ValueError("States must be finite.")
+        refined_order = self.quadrature_order + 2 if order is None else order
+        refined_order = positive_integer(refined_order, "order", 0)
+        if refined_order <= self.quadrature_order:
+            raise ValueError("order must be greater than the field quadrature order.")
+        refined = self.problem.field(
+            basis=self.basis,
+            quadrature=refined_order,
+            max_quadrature_points=self.max_quadrature_points,
+            max_intermediate_entries=self.max_intermediate_entries,
+            device=self.device,
+            dtype=self.dtype,
+        )
+        return torch.linalg.vector_norm(refined(z) - self(z), dim=-1)
+
+    def solve(self, z0, times, *, step=None, tolerance=None):
+        """Solve the autonomous Galerkin ODE at the requested times."""
+        from .evolution import solve
+
+        return solve(self, z0, times, step=step, tolerance=tolerance)
+
+    def time_error(self, z0, times, *, step=None, tolerance=None):
+        """Compare RK solutions after halving the step or adaptive tolerance."""
+        from .evolution import time_error
+
+        return time_error(self, z0, times, step=step, tolerance=tolerance)
 
     def _states(self, z):
         if not isinstance(z, torch.Tensor):

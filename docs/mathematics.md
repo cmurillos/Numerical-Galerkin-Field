@@ -195,8 +195,41 @@ La realización numérica es diferenciable respecto de cada `Z_alpha`. Las tabla
 geometría, la base, los coeficientes espaciales y la cuadratura representan parámetros
 fijos del operador y se mantienen fuera de ese grafo de diferenciación.
 
-La biblioteca construye y evalúa `G`; la integración de esta EDO es una operación
-posterior e independiente.
+La integración de esta EDO es posterior e independiente de la construcción de `G`.
+El método `G.solve` implementa RK4 fijo o Dormand--Prince 5(4) adaptativo sin modificar
+el campo. Para tiempos pedidos `t_0,...,t_J` y estados iniciales `z_0` con ejes de lote
+arbitrarios, devuelve el tensor de trayectorias
+
+```text
+Z = (z(t_0),...,z(t_J)) in R^((J+1) x ... x N).
+```
+
+La base ortonormal convierte diferencias euclídeas de coordenadas en diferencias
+funcionales exactas dentro de `V_N`:
+
+```text
+norm(Phi z - Phi y)_L2 = norm(z-y)_2.
+```
+
+Esta identidad fundamenta los indicadores temporales y de cuadratura de D-012. El
+indicador temporal compara dos integraciones refinadas y el de cuadratura compara dos
+campos ensamblados con órdenes distintos. Ambos miden sensibilidad al refinamiento;
+no son cotas del error frente a una solución exacta.
+
+Para una función física `u`, el indicador espacial se evalúa directamente como
+
+```text
+norm(u-P_N u)_L2,
+```
+
+usando cuadratura sobre el residuo reconstruido. Separar estas tres cantidades evita
+confundir truncamiento espacial, integración temporal y error de ensamblaje. Ninguna
+de ellas sustituye las hipótesis de estabilidad y convergencia propias del problema.
+
+Los métodos RK de D-011 son explícitos. En problemas rígidos, en particular al refinar
+discretizaciones difusivas, la estabilidad puede exigir pasos mucho menores que los
+dictados por la precisión. Una futura extensión implícita o IMEX deberá conservar el
+mismo campo reducido y cambiar únicamente el integrador temporal.
 
 Una función discontinua de `L2` puede proyectarse sobre una sucesión de espacios
 continuos. Cada proyección es continua y puede converger a la función original en

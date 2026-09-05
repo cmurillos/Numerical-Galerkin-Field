@@ -561,14 +561,14 @@ variables en tiempo de evaluación.
 ### Separación de responsabilidades
 
 Construir `G` puede ensamblar, integrar, validar y tabular. Llamar `G(z)` sólo evalúa el
-campo ya preparado. El núcleo no resuelve
+campo ya preparado. El contrato de construcción y evaluación de D-006 no resuelve
 
 ```text
 z'(t)=G(z(t)),
 ```
 
-no recibe el tiempo y no impone un integrador. La evolución temporal sigue siendo una
-operación posterior e independiente.
+no recibe el tiempo y no altera `G` con un integrador. D-011 añade después una operación
+separada `G.solve(...)`: el campo continúa siendo autónomo, fijo y reutilizable.
 
 ## Criterios de aceptación de D-006
 
@@ -998,3 +998,204 @@ La implementación debe verificar al menos:
 4. conservación de autograd respecto de parámetros de una función PyTorch;
 5. rechazo explícito ya existente de `ds.interior`;
 6. ausencia de nuevas clases de condición de frontera o integración temporal.
+
+## D-011 — Evolución temporal por Runge--Kutta
+
+**Estado:** aceptada.
+
+### Objeto matemático
+
+Fijados el campo y el dato inicial, la trayectoria reducida satisface
+
+```text
+z'(t) = G(z(t)),       z(t_0) = z_0.
+```
+
+La integración es posterior a la construcción de `G`: no cambia la geometría, la forma
+débil, la base, los coeficientes ni la cuadratura. Si el dato se entrega como función
+física, la cadena completa permanece explícita:
+
+```python
+z0 = G.project(u0)
+Z = G.solve(z0, times)
+U = G.reconstruct(Z, points)
+```
+
+### Interfaz compacta
+
+`times:[T]` contiene los tiempos en los que se devuelve la trayectoria. Debe ser un
+tensor PyTorch real, finito, estrictamente monótono, no vacío y con el mismo `dtype` y
+`device` que `G`. Se admiten tiempos crecientes y decrecientes.
+
+```python
+Z = G.solve(z0, times)  # RK45 adaptativo
+Z = G.solve(z0, times, tolerance=1e-7)  # RK45 adaptativo
+Z = G.solve(z0, times, step=1e-3)  # RK4 fijo
+```
+
+No se introduce una clase de trayectoria. Si `z0:[*S,N]`, entonces
+
+```text
+G.solve(z0,times): [T,*S,N].
+```
+
+Así, la trayectoria completa puede pasarse directamente a `reconstruct`, `grad`,
+`hessian` o de nuevo a `G`. Para `T=1` se devuelve solamente el estado inicial con el
+eje temporal añadido. Los lotes vacíos conservan exactamente su forma.
+
+### RK4 fijo
+
+Cuando se especifica `step=h>0`, cada intervalo entre dos tiempos pedidos se divide en
+`ceil(abs(Delta t)/h)` subintervalos iguales. Por tanto `step` es el máximo paso interno,
+los estados se entregan exactamente en `times` y se admiten mallas temporales no
+uniformes. En cada subintervalo se usa el esquema clásico
+
+```text
+k1 = G(z_n),
+k2 = G(z_n + h k1/2),
+k3 = G(z_n + h k2/2),
+k4 = G(z_n + h k3),
+z_(n+1) = z_n + h(k1 + 2k2 + 2k3 + k4)/6.
+```
+
+### RK45 adaptativo
+
+Si se omite `step`, se usa el par embebido Dormand--Prince 5(4). La estimación local se
+normaliza componente a componente mediante
+
+```text
+tolerance * (1 + max(abs(z_n), abs(z_(n+1)))).
+```
+
+y el máximo se toma sobre todos los modos y todos los lotes. El algoritmo elige y puede
+rechazar pasos internos sin modificar los tiempos de salida. La tolerancia por defecto
+es `5e-5` en `float32` y `1e-8` en `float64`. `step` y `tolerance` representan modos
+distintos y no pueden combinarse.
+
+### Diferenciación y límites
+
+Las operaciones aceptadas conservan autograd respecto de `z0` y de las operaciones
+dinámicas diferenciables evaluadas por `G`. La aceptación o rechazo de un paso
+adaptativo es una decisión numérica discreta; no se promete diferenciabilidad respecto
+de esa decisión ni respecto de `times`.
+
+Toda velocidad y todo estado producido deben ser finitos. Existe un presupuesto interno
+para impedir bucles ilimitados. RK4 y RK45 son métodos explícitos: D-011 no garantiza
+estabilidad eficiente para difusión severa u otros campos rígidos. Métodos implícitos o
+IMEX podrán añadirse sin cambiar el significado de `G.solve`.
+
+### Criterios de aceptación de D-011
+
+La implementación debe verificar al menos:
+
+1. exactitud esperada sobre un campo lineal con solución conocida;
+2. RK4 fijo y RK45 adaptativo en tiempos de salida no uniformes;
+3. integración hacia adelante y hacia atrás;
+4. conservación de ejes de lote, lotes vacíos y tiempo único;
+5. compatibilidad directa con la reconstrucción de toda la trayectoria;
+6. conservación de autograd respecto del estado inicial;
+7. ejecución en `float32`, `float64`, CPU y, cuando esté disponible, CUDA;
+8. rechazo de estados, tiempos, pasos y tolerancias inválidos o no finitos.
+
+## D-012 — Indicadores de error y convergencia
+
+**Estado:** aceptada.
+
+### Decisión
+
+El paquete separa tres fuentes numéricas sin presentarlas como cotas rigurosas a
+posteriori:
+
+```text
+aproximación espacial, integración temporal y cuadratura.
+```
+
+Cada indicador es absoluto. Esta elección evita ocultar una división inestable cuando
+la solución o el campo de referencia es cercano a cero. El usuario puede normalizarlo
+con la escala física apropiada para su problema.
+
+### Error espacial de proyección
+
+```python
+space_error = G.projection_error(u0)
+space_error = G.projection_error(u0, quadrature=12)
+```
+
+El método estima mediante cuadratura
+
+```text
+||u - P_N u||_L2(Omega_h).
+```
+
+Acepta exactamente las mismas funciones y `Coefficient` que `G.project`, conserva sus
+ejes de lote y reutiliza los modos automático, fijo y adaptativo de D-007. Para estudiar
+convergencia espacial se construyen bases fijas de tamaños o mallas sucesivas y se
+comparan sus errores sobre la misma función. El método mide el mejor error de
+representación del dato; no demuestra por sí solo convergencia de toda una trayectoria.
+
+### Indicador temporal
+
+```python
+time_error = G.time_error(z0, times, step=1e-3)
+time_error = G.time_error(z0, times, tolerance=1e-7)
+```
+
+Con paso fijo devuelve
+
+```text
+||Z_h(t_j) - Z_(h/2)(t_j)||_2,
+```
+
+y con RK45 compara las tolerancias `tol` y `tol/2`. La salida tiene forma `[T,*S]`.
+Como la síntesis es una isometría, esta norma euclídea coincide exactamente con la
+distancia `L2` entre ambas reconstrucciones. Es un indicador de refinamiento, no una
+cota certificada del error respecto de la solución exacta.
+
+### Indicador de cuadratura
+
+```python
+quadrature_error = G.quadrature_error(z)
+quadrature_error = G.quadrature_error(z, order=12)
+```
+
+El campo se vuelve a ensamblar temporalmente con un orden fijo mayor y se calcula
+
+```text
+||G_q(z) - G_qref(z)||_2.
+```
+
+Por defecto `qref=q+2`; un orden explícito debe ser estrictamente mayor que el usado por
+`G`. La salida conserva todos los ejes de lote anteriores a `N`. Por ortonormalidad,
+también es la distancia `L2` entre las velocidades funcionales reconstruidas. La
+operación puede ser costosa porque prepara nuevas tablas, pero no muta el campo original.
+
+### Interpretación y cantidades físicas
+
+Los indicadores sólo aíslan cambios al refinar una decisión numérica. No garantizan que
+la forma débil modele correctamente la ecuación ni sustituyen una estimación analítica.
+La convergencia práctica requiere que los indicadores decrezcan en una sucesión de
+refinamientos.
+
+No existe una energía universal inferible de una forma débil arbitraria. Para una
+trayectoria `Z`, la norma `L2` se obtiene exactamente con
+
+```python
+torch.linalg.vector_norm(Z, dim=-1)
+```
+
+y cualquier masa, energía o invariante adicional debe programarse como el observable
+matemático correspondiente. El núcleo no declara conservación donde el usuario no la
+ha especificado.
+
+### Criterios de aceptación de D-012
+
+La implementación debe verificar al menos:
+
+1. error de proyección nulo, salvo precisión numérica, sobre el espacio fijo;
+2. reducción del error de proyección al enriquecer una familia convergente;
+3. indicadores temporales fijo y adaptativo con lotes arbitrarios;
+4. reducción del indicador temporal al refinar el paso en un problema regular;
+5. indicador de cuadratura con forma `[*S]` y orden de referencia superior;
+6. ausencia de mutaciones sobre `G`, su base o sus tablas;
+7. documentación explícita de que los tres resultados son indicadores, no cotas;
+8. compatibilidad con CPU, CUDA, `float32` y `float64` bajo los contratos previos.

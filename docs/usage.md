@@ -180,6 +180,68 @@ explícita: D-010 aproxima datos discontinuos dentro de un espacio continuo. Una
 extensión de Galerkin discontinuo deberá definir por separado trazas, saltos, promedios
 y orientación.
 
+## Evolución temporal
+
+Una vez construido `G`, el dato inicial se proyecta y la EDO reducida se integra sin
+cambiar la base ni el operador:
+
+```python
+import torch
+
+z0 = G.project(u0)
+times = torch.linspace(0, 1, 101, dtype=G.dtype, device=G.device)
+
+Z = G.solve(z0, times)  # RK45 adaptativo
+U = G.reconstruct(Z, points)
+```
+
+`Z` tiene forma `[T,*S,N]` cuando `z0` tiene forma `[*S,N]`. Los tiempos sólo indican
+dónde se devuelve la solución; RK45 elige sus propios pasos internos. La tolerancia
+puede fijarse explícitamente:
+
+```python
+Z = G.solve(z0, times, tolerance=1e-7)
+```
+
+Para RK4 fijo se entrega el máximo paso interno:
+
+```python
+Z = G.solve(z0, times, step=1e-3)
+```
+
+Cada intervalo de `times` se subdivide cuando es necesario, de modo que también se
+admiten tiempos de salida no uniformes. `step` y `tolerance` no se combinan. Ambos
+métodos son explícitos; una difusión rígida puede requerir un paso muy pequeño.
+
+## Error y convergencia
+
+Los tres diagnósticos básicos se mantienen separados:
+
+```python
+space = G.projection_error(u0)
+time = G.time_error(z0, times, step=1e-3)
+quadrature = G.quadrature_error(Z)
+```
+
+`space` estima `||u0-P_Nu0||_L2`. Admite la misma entrada y las mismas opciones de
+cuadratura que `project`. Para verificar convergencia espacial se repite la llamada con
+bases de mayor tamaño o con mallas sucesivamente refinadas.
+
+`time` compara RK4 con pasos `h` y `h/2`. Si se entrega `tolerance` en lugar de `step`,
+compara dos ejecuciones RK45 con tolerancias `tol` y `tol/2`. Su forma es `[T,*S]`.
+
+`quadrature` compara `G(Z)` con el campo ensamblado temporalmente a orden `q+2`. Puede
+indicarse otro orden superior:
+
+```python
+quadrature = G.quadrature_error(Z, order=14)
+```
+
+Los resultados son indicadores absolutos de sensibilidad al refinamiento, no cotas
+certificadas. La base ortonormal hace que las diferencias de coordenadas usadas por
+`time_error` y `quadrature_error` coincidan con diferencias `L2` entre las funciones
+reconstruidas. El campo original nunca se modifica.
+
 ## Bases ortonormales
 
 La ruta recomendada calcula directamente una base espectral adaptada a la geometría:
