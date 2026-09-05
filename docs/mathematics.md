@@ -58,6 +58,19 @@ Toda derivada espacial se representa en las `p` coordenadas ambientes y cada eje
 derivativo se proyecta con `Pi_e`. Así, para `k<p`, `grad(u)` es el gradiente tangencial
 y no depende de la extensión ambiental usada para programar una función de base.
 
+Para `x` dentro de un simplex padre `K_e`, la síntesis y sus primeras derivadas son
+
+```text
+u_z(x) = sum_j z_j phi_j(x),
+grad_Omega_h u_z(x) = sum_j z_j grad_Omega_h phi_j(x),
+Hess_Omega_h u_z(x) = sum_j z_j Hess_Omega_h phi_j(x).
+```
+
+Cada eje del Hessiano se proyecta con `Pi_e`. Estas son derivadas clásicas por
+simplex; no incluyen términos distribucionales asociados a saltos entre elementos. Si
+`x` pertenece a varios simplejos y las trazas no coinciden, el simplex padre forma
+parte necesaria de la evaluación.
+
 ## Espacio y base
 
 Sea H = L2(Omega_h; R^s), donde `s` puede reemplazarse por una forma tensorial

@@ -1,6 +1,7 @@
 """User-defined and simplicial function bases, independent of boundary-condition types."""
 
 import json
+from itertools import product
 from math import comb, prod
 from pathlib import Path
 from typing import Protocol
@@ -116,6 +117,36 @@ class PolynomialBasis(CallableBasis):
             return (y[:, None, :] ** powers[None, :, :]).prod(dim=-1)
 
         super().__init__(values, dimension=len(a))
+
+    def evaluate(self, points, *, order=0, cells=None, barycentric=None):
+        if order == 0:
+            return super().evaluate(
+                points,
+                order=order,
+                cells=cells,
+                barycentric=barycentric,
+            )
+        order = positive_integer(order, "derivative order")
+        n = self.exponents.shape[1]
+        y = (points - points.new_tensor(self.center.copy())) / points.new_tensor(self.scale.copy())
+        derivatives = []
+        for axes in product(range(n), repeat=order):
+            counts = np.bincount(axes, minlength=n)
+            remaining = self.exponents - counts
+            valid = np.all(remaining >= 0, axis=1)
+            powers = np.maximum(remaining, 0)
+            coefficients = np.ones(self.dimension)
+            for axis, count in enumerate(counts):
+                for step in range(count):
+                    coefficients *= (self.exponents[:, axis] - step) / self.scale[axis]
+            coefficients[~valid] = 0
+            values = (y[:, None, :] ** points.new_tensor(powers)[None, :, :]).prod(dim=-1)
+            derivatives.append(values * points.new_tensor(coefficients)[None, :])
+        return torch.stack(derivatives, dim=-1).reshape(
+            len(points),
+            self.dimension,
+            *((n,) * order),
+        )
 
 
 class ComponentBasis:

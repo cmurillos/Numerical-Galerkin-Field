@@ -334,6 +334,45 @@ Una función PyTorch conserva autograd respecto de sus parámetros. Un `Coeffici
 un dato fijo y se mantiene fuera del grafo. La proyección no modifica la base, el campo
 ni sus tablas.
 
+## Evaluación en puntos físicos
+
+Una vez conocidas las coordenadas `z`, el campo reconstruido y sus derivadas espaciales
+se evalúan con tres métodos directos:
+
+```python
+points = torch.tensor([[0.2], [0.8]], dtype=G.dtype, device=G.device)
+
+values = G.reconstruct(z, points)
+gradients = G.grad(z, points)
+Hessians = G.hessian(z, points)
+```
+
+Para `z:[*S,N]` y `points:[Q,p]`, las salidas tienen respectivamente las formas
+
+```text
+[*S,Q,*value_shape]
+[*S,Q,*value_shape,p]
+[*S,Q,*value_shape,p,p].
+```
+
+El paquete localiza automáticamente cada punto en la malla. Si un punto está sobre una
+cara y la cantidad solicitada tiene trazas distintas, se selecciona el simplex padre
+de forma explícita:
+
+```python
+cells = torch.tensor([0, 3], dtype=torch.int64, device=G.device)
+gradients = G.grad(z, points, cells=cells)
+```
+
+`cells[q]` es el índice del simplex que contiene `points[q]`; la asignación se valida y
+no permite extrapolación. En una malla embebida, `grad` y `hessian` son tangenciales al
+simplex y conservan los `p` ejes ambientes. Son derivadas por elemento: para una base
+`P1`, el Hessiano es cero dentro de cada simplex y el gradiente puede saltar en sus
+caras.
+
+Estos métodos derivan `u_z(x)` respecto de `x`. El Jacobiano o el Hessiano de
+`G:R^N->R^N` respecto de `z` continúan calculándose con `torch.func`.
+
 ## Evaluación tensorial y diferenciación
 
 El último eje siempre contiene los `N` coeficientes. Todos los ejes anteriores se

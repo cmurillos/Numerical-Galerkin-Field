@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from math import prod
 from numbers import Integral, Real
 
+import numpy as np
 import torch
 
 from .forms import Coefficient, build_form, coefficient_expressions, derivative_orders, evaluate
@@ -38,6 +39,40 @@ class _Table:
         }
 
 
+def _basis_values(geometry, basis, points, cells, barycentric, order):
+    """Evaluate one fixed basis derivative and enforce the public tensor contract."""
+    values = basis.evaluate(
+        points,
+        order=order,
+        cells=cells,
+        barycentric=barycentric,
+    )
+    if not isinstance(values, torch.Tensor):
+        values = torch.as_tensor(values, dtype=points.dtype, device=points.device)
+    expected = (
+        len(points),
+        basis.dimension,
+        *basis.value_shape,
+        *((geometry.ambient_dimension,) * order),
+    )
+    if values.shape != expected:
+        raise ValueError(
+            f"Basis derivative {order} must have shape {expected}, got {tuple(values.shape)}."
+        )
+    if values.device != points.device or values.dtype != points.dtype:
+        raise ValueError("Basis values must use the field device and dtype.")
+    if order and geometry.dimension < geometry.ambient_dimension:
+        projectors = points.new_tensor(geometry.tangent_projectors.copy())[cells]
+        for axis in range(order):
+            position = values.ndim - order + axis
+            moved = values.movedim(position, -1)
+            moved = torch.einsum("q...b,qab->q...a", moved, projectors)
+            values = moved.movedim(-1, position)
+    if not torch.isfinite(values).all():
+        raise ValueError("Basis evaluation returned nonfinite values.")
+    return values.detach()
+
+
 def _table(
     geometry,
     basis,
@@ -61,29 +96,16 @@ def _table(
     points = torch.tensor(q.points.copy(), dtype=dtype, device=device)
     cells = torch.tensor(q.cells.copy(), device=device)
     barycentric = torch.tensor(q.barycentric.copy(), dtype=dtype, device=device)
-    expected_prefix = (len(points), basis.dimension, *basis.value_shape)
     tables = {}
     for order in sorted(set(orders) | {0}):
-        values = basis.evaluate(points, order=order, cells=cells, barycentric=barycentric)
-        if not isinstance(values, torch.Tensor):
-            values = torch.as_tensor(values, dtype=dtype, device=device)
-        expected = (*expected_prefix, *((geometry.ambient_dimension,) * order))
-        if values.shape != expected:
-            raise ValueError(
-                f"Basis derivative {order} must have shape {expected}, got {tuple(values.shape)}."
-            )
-        if values.device != points.device or values.dtype != points.dtype:
-            raise ValueError("Basis values must use the field device and dtype.")
-        if order and geometry.dimension < geometry.ambient_dimension:
-            projectors = points.new_tensor(geometry.tangent_projectors.copy())[cells]
-            for axis in range(order):
-                position = values.ndim - order + axis
-                moved = values.movedim(position, -1)
-                moved = torch.einsum("q...b,qab->q...a", moved, projectors)
-                values = moved.movedim(-1, position)
-        if not torch.isfinite(values).all():
-            raise ValueError("Basis evaluation returned nonfinite values.")
-        tables[order] = values.detach()
+        tables[order] = _basis_values(
+            geometry,
+            basis,
+            points,
+            cells,
+            barycentric,
+            order,
+        )
     coefficient_tables = {
         coefficient: coefficient.tabulate(geometry, points, cells, barycentric)
         for coefficient in coefficients
@@ -578,12 +600,228 @@ class GalerkinField:
         self.mass_matrix = self.mass_matrix.to(device=device, dtype=dtype)
         return self
 
-    def reconstruct(self, z, *, boundary=None):
-        """Reconstruct ``Phi z`` as ``[..., Q, *value_shape]`` on a prepared measure."""
+    def _physical_points(self, points):
+        if not isinstance(points, torch.Tensor):
+            raise TypeError("Physical points must be torch tensors.")
+        expected = self.problem.geometry.ambient_dimension
+        if points.ndim != 2 or points.shape[1] != expected:
+            raise ValueError(f"Physical points must have shape [Q,{expected}].")
+        if points.device != self.device or points.dtype != self.dtype:
+            raise ValueError("Physical points and the field must share device and dtype.")
+        if not torch.isfinite(points).all():
+            raise ValueError("Physical points must be finite.")
+        return points.detach()
+
+    def _cell_coordinates(self, points, cells):
+        geometry = self.problem.geometry
+        corners = geometry.vertices[geometry.simplices[cells]]
+        offsets = points - corners[:, 0]
+        inverse = geometry.inverse_jacobians[cells]
+        coordinates = np.einsum("nkp,np->nk", inverse, offsets, optimize=True)
+        barycentric = np.concatenate(
+            (1 - coordinates.sum(axis=1, keepdims=True), coordinates),
+            axis=1,
+        )
+
+        projectors = geometry.tangent_projectors[cells]
+        tangential = np.einsum("nij,nj->ni", projectors, offsets, optimize=True)
+        residual = np.linalg.norm(offsets - tangential, axis=1)
+        diameter = np.linalg.norm(corners[:, 1:] - corners[:, :1], axis=2).max(axis=1)
+        scale = np.maximum.reduce(
+            (
+                np.max(np.abs(points), axis=1),
+                np.max(np.abs(corners), axis=(1, 2)),
+                diameter,
+            )
+        )
+        scale = np.maximum(scale, np.finfo(np.float64).tiny)
+        precision = np.float32 if self.dtype == torch.float32 else np.float64
+        epsilon = np.finfo(precision).eps
+        distance_tolerance = 256 * epsilon * scale
+        inverse_norm = np.linalg.norm(inverse, ord=np.inf, axis=(1, 2))
+        barycentric_tolerance = 256 * epsilon + distance_tolerance * inverse_norm
+        valid = residual <= distance_tolerance
+        valid &= np.min(barycentric, axis=1) >= -barycentric_tolerance
+        valid &= np.max(barycentric, axis=1) <= 1 + barycentric_tolerance
+
+        cleaned = np.clip(barycentric, 0.0, 1.0)
+        cleaned /= cleaned.sum(axis=1, keepdims=True)
+        return cleaned, valid
+
+    def _provided_cells(self, cells, count):
+        if not isinstance(cells, torch.Tensor):
+            raise TypeError("cells must be a torch tensor.")
+        if cells.dtype != torch.int64:
+            raise ValueError("cells must use torch.int64.")
+        if cells.device != self.device:
+            raise ValueError("cells and the field must share device.")
+        if cells.shape != (count,):
+            raise ValueError(f"cells must have shape [{count}].")
+        result = cells.detach().cpu().numpy()
+        cell_count = len(self.problem.geometry.simplices)
+        if np.any(result < 0) or np.any(result >= cell_count):
+            raise ValueError("cells contains an invalid simplex index.")
+        return result
+
+    def _locate_points(self, points, cells):
+        geometry = self.problem.geometry
+        host_points = points.cpu().numpy().astype(np.float64, copy=False)
+        count = len(host_points)
+        if cells is not None:
+            selected = self._provided_cells(cells, count)
+            barycentric, valid = self._cell_coordinates(host_points, selected)
+            if not np.all(valid):
+                index = int(np.flatnonzero(~valid)[0])
+                raise ValueError(
+                    f"Physical point {index} does not belong to the simplex selected by cells."
+                )
+            return selected, barycentric, []
+
+        simplices = geometry.simplices
+        corners = geometry.vertices[simplices]
+        lower, upper = corners.min(axis=1), corners.max(axis=1)
+        diameter = np.linalg.norm(corners[:, 1:] - corners[:, :1], axis=2).max(axis=1)
+        scale = np.maximum(np.max(np.abs(corners), axis=(1, 2)), diameter)
+        scale = np.maximum(scale, np.finfo(np.float64).tiny)
+        precision = np.float32 if self.dtype == torch.float32 else np.float64
+        box_tolerance = 256 * np.finfo(precision).eps * scale
+
+        candidates = [[] for _ in range(count)]
+        ambient = geometry.ambient_dimension
+        pair_budget = max(1, self.max_intermediate_entries // max(1, 2 * ambient))
+        point_chunk = max(1, min(count, int(pair_budget**0.5)))
+        cell_chunk = max(1, pair_budget // point_chunk)
+        for point_start in range(0, count, point_chunk):
+            point_stop = min(count, point_start + point_chunk)
+            block_points = host_points[point_start:point_stop]
+            for cell_start in range(0, len(simplices), cell_chunk):
+                cell_stop = min(len(simplices), cell_start + cell_chunk)
+                tolerance = box_tolerance[cell_start:cell_stop]
+                inside = np.all(
+                    block_points[:, None, :]
+                    >= lower[None, cell_start:cell_stop] - tolerance[None, :, None],
+                    axis=2,
+                )
+                inside &= np.all(
+                    block_points[:, None, :]
+                    <= upper[None, cell_start:cell_stop] + tolerance[None, :, None],
+                    axis=2,
+                )
+                local_points, local_cells = np.nonzero(inside)
+                if not len(local_points):
+                    continue
+                global_cells = local_cells + cell_start
+                barycentric, valid = self._cell_coordinates(
+                    block_points[local_points],
+                    global_cells,
+                )
+                for point, cell, bary, keep in zip(
+                    local_points,
+                    global_cells,
+                    barycentric,
+                    valid,
+                ):
+                    if keep:
+                        candidates[point_start + int(point)].append((int(cell), bary))
+
+        missing = [index for index, matches in enumerate(candidates) if not matches]
+        if missing:
+            raise ValueError(
+                f"Physical point {missing[0]} does not belong to the simplicial domain."
+            )
+        selected = np.asarray([matches[0][0] for matches in candidates], dtype=np.int64)
+        barycentric = np.stack([matches[0][1] for matches in candidates])
+        alternatives = [
+            (point, cell, bary)
+            for point, matches in enumerate(candidates)
+            for cell, bary in matches[1:]
+        ]
+        return selected, barycentric, alternatives
+
+    def _basis_at_points(self, points, cells, order):
+        selected, barycentric, alternatives = self._locate_points(points, cells)
+        cell_tensor = torch.as_tensor(selected, dtype=torch.int64, device=self.device)
+        barycentric_tensor = points.new_tensor(barycentric)
+        values = _basis_values(
+            self.problem.geometry,
+            self.basis,
+            points,
+            cell_tensor,
+            barycentric_tensor,
+            order,
+        )
+        if alternatives:
+            point_indices = torch.tensor(
+                [item[0] for item in alternatives],
+                dtype=torch.int64,
+                device=self.device,
+            )
+            alternate_cells = torch.tensor(
+                [item[1] for item in alternatives],
+                dtype=torch.int64,
+                device=self.device,
+            )
+            alternate_barycentric = points.new_tensor(np.stack([item[2] for item in alternatives]))
+            alternate_values = _basis_values(
+                self.problem.geometry,
+                self.basis,
+                points.index_select(0, point_indices),
+                alternate_cells,
+                alternate_barycentric,
+                order,
+            )
+            reference = values.index_select(0, point_indices)
+            tolerance = 1e-5 if self.dtype == torch.float32 else 1e-10
+            equal = torch.isclose(
+                alternate_values,
+                reference,
+                atol=tolerance,
+                rtol=tolerance,
+            ).reshape(len(alternatives), -1)
+            ambiguous = ~torch.all(equal, dim=1)
+            if torch.any(ambiguous):
+                first = int(torch.nonzero(ambiguous, as_tuple=False)[0, 0].item())
+                point = alternatives[first][0]
+                quantity = {0: "values", 1: "gradients", 2: "Hessians"}[order]
+                raise ValueError(
+                    f"Physical point {point} has different {quantity} on adjacent simplices; "
+                    "pass cells to select a trace."
+                )
+        return values
+
+    def _spatial_reconstruction(self, z, points, cells, order):
+        z, batch_shape = self._states(z)
+        points = self._physical_points(points)
+        if not len(points):
+            if cells is not None:
+                self._provided_cells(cells, 0)
+            derivative_shape = (self.problem.geometry.ambient_dimension,) * order
+            return z.new_empty((*batch_shape, 0, *self.value_shape, *derivative_shape))
+        modes = self._basis_at_points(points, cells, order)
+        values = torch.einsum("bn,qn...->bq...", z, modes)
+        derivative_shape = (self.problem.geometry.ambient_dimension,) * order
+        return values.reshape((*batch_shape, len(points), *self.value_shape, *derivative_shape))
+
+    def reconstruct(self, z, points=None, *, cells=None, boundary=None):
+        """Evaluate ``Phi z`` on a prepared measure or at physical points ``[Q,p]``."""
+        if points is not None:
+            if boundary is not None:
+                raise ValueError("boundary cannot be combined with physical points.")
+            return self._spatial_reconstruction(z, points, cells, 0)
+        if cells is not None:
+            raise ValueError("cells requires physical points.")
         z, batch_shape = self._states(z)
         table = self._volume if boundary is None else self._boundary[boundary]
         values = torch.einsum("bn,qn...->bq...", z, table.basis[0])
         return values.reshape((*batch_shape, len(table.points), *self.value_shape))
+
+    def grad(self, z, points, *, cells=None):
+        """Evaluate the elementwise tangential spatial gradient of ``Phi z``."""
+        return self._spatial_reconstruction(z, points, cells, 1)
+
+    def hessian(self, z, points, *, cells=None):
+        """Evaluate the elementwise tangential spatial Hessian of ``Phi z``."""
+        return self._spatial_reconstruction(z, points, cells, 2)
 
     def _projection_table(self, order):
         if order == self.quadrature_order:

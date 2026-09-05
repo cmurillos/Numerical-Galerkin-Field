@@ -765,9 +765,9 @@ gradiente, la proyección final conserva autograd respecto de esos parámetros. 
 La selección adaptativa del orden es una decisión numérica discreta; la diferenciación
 corresponde a la integral evaluada con el orden finalmente seleccionado.
 
-`G.reconstruct(z)` continúa evaluando exclusivamente en los puntos ya preparados por
-el campo. La localización y evaluación en puntos físicos arbitrarios se reserva para
-D-009. D-008 tampoco integra la ecuación temporal ni modifica el espacio `V_N`.
+`G.reconstruct(z)` continúa evaluando en los puntos ya preparados por el campo. La
+evaluación adicional en puntos físicos se especifica en D-009. D-008 tampoco integra
+la ecuación temporal ni modifica el espacio `V_N`.
 
 ### Criterios de aceptación de D-008
 
@@ -781,3 +781,126 @@ La implementación debe verificar al menos:
 6. conservación de autograd para funciones PyTorch;
 7. inmutabilidad de la base y de las tablas del campo;
 8. rechazo de valores crudos, complejos, no finitos o con forma incompatible.
+
+## D-009 — Evaluación espacial del campo reconstruido
+
+**Estado:** aceptada.
+
+### Objeto matemático
+
+Para unas coordenadas de Galerkin `z`, la síntesis espacial es
+
+```text
+u_z(x) = sum_j z_j phi_j(x).
+```
+
+D-009 permite evaluar `u_z` y sus dos primeras derivadas espaciales en puntos físicos
+arbitrarios de `Omega_h`. Estas operaciones no evalúan `G` en los puntos físicos ni
+representan derivadas de `G:R^N->R^N` respecto de `z`.
+
+### Interfaz compacta
+
+```python
+values = G.reconstruct(z, points)
+gradients = G.grad(z, points)
+Hessians = G.hessian(z, points)
+```
+
+El comportamiento anterior permanece intacto:
+
+```python
+values_at_quadrature = G.reconstruct(z)
+values_at_boundary_quadrature = G.reconstruct(z, boundary="wall")
+```
+
+No se introduce un argumento `order`: el nombre de cada método determina sin
+ambigüedad la cantidad solicitada. `points` debe ser un tensor PyTorch `[Q,p]`, real y
+finito, con el mismo `dtype` y `device` que `G`. No se convierten silenciosamente
+listas, arreglos NumPy, dispositivos ni precisiones.
+
+Si `z:[*S,N]`, las formas de salida son
+
+```text
+G.reconstruct(z, points): [*S,Q,*value_shape]
+G.grad(z, points):        [*S,Q,*value_shape,p]
+G.hessian(z, points):     [*S,Q,*value_shape,p,p].
+```
+
+Se conservan todos los ejes de lote, incluidos tamaños cero. Los ejes derivativos se
+añaden al final y siempre se expresan en las coordenadas ambientes.
+
+### Localización y selección del simplex
+
+Por defecto, el campo localiza automáticamente cada punto en los simplejos afines de
+`Omega_h` y calcula sus coordenadas baricéntricas. Un punto que no pertenece al
+complejo —incluido un punto fuera del soporte afín de una variedad embebida— se rechaza
+explícitamente.
+
+El argumento avanzado `cells:[Q]`, entero `torch.int64`, permite indicar el simplex
+padre de cada punto:
+
+```python
+values = G.reconstruct(z, points, cells=cells)
+gradients = G.grad(z, points, cells=cells)
+Hessians = G.hessian(z, points, cells=cells)
+```
+
+Cada asignación se valida geométricamente. `cells` no cambia el punto ni extrapola la
+base fuera del simplex seleccionado.
+
+Un punto interior tiene un único simplex padre. Sobre una cara compartida puede haber
+varias trazas. Si todas las evaluaciones de la base para la cantidad solicitada
+coinciden dentro de tolerancia numérica, el resultado es único y no se exige `cells`.
+Si difieren, la llamada falla y requiere que el usuario seleccione la traza. Así se
+evita elegir silenciosamente un lado según la numeración de la malla. En particular,
+una base continua puede tener valores únicos pero gradientes distintos en una cara.
+
+### Derivadas elementales y geometrías embebidas
+
+Las operaciones calculan
+
+```text
+grad_Omega_h u_z = sum_j z_j grad_Omega_h phi_j,
+Hess_Omega_h u_z = sum_j z_j Hess_Omega_h phi_j.
+```
+
+En un simplex `K_e` embebido, cada eje derivativo se proyecta con el proyector
+tangencial `Pi_e`. Por tanto el gradiente tiene `p` componentes y es tangente a `K_e`;
+el Hessiano tiene forma `[p,p]` y es tangencial en ambos índices. Para la geometría
+afín a trozos de D-003, el Hessiano es el Hessiano tangencial clásico dentro de cada
+simplex.
+
+Las derivadas son elementales. No se añaden contribuciones distribucionales sobre
+caras y no se afirma conformidad Sobolev global. Por ejemplo, una base Lagrange `P1`
+tiene gradiente constante y Hessiano cero en el interior de cada simplex, aunque el
+gradiente pueda saltar entre elementos. Bases `P2` o superiores y bases globales
+suaves pueden tener Hessianos elementales no nulos.
+
+### Diferenciación y base fija
+
+Los tres métodos son lineales en `z` y conservan autograd respecto de sus coordenadas.
+Las derivadas de `G` como aplicación de coeficientes continúan obteniéndose con
+
+```python
+J = torch.func.jacrev(G)(z)
+H = torch.func.jacrev(torch.func.jacrev(G))(z)
+```
+
+Los puntos, la geometría, la localización y la base quedan fuera del grafo. Una base
+programable forma parte del dato fijo: su evaluador debe representar la misma familia
+que se validó al construir `G` y no debe mutarse después.
+
+### Criterios de aceptación de D-009
+
+La implementación debe verificar al menos:
+
+1. reconstrucción, gradiente y Hessiano en puntos físicos interiores;
+2. conservación de ejes de lote y formas de valor escalares, vectoriales y tensoriales;
+3. derivadas tangenciales con `p` componentes sobre geometrías embebidas;
+4. localización automática en complejos de simplejos de dimensión arbitraria;
+5. rechazo explícito de puntos exteriores y asignaciones `cells` incompatibles;
+6. detección de valores o derivadas ambiguos sobre caras compartidas;
+7. selección explícita de cada traza mediante `cells`;
+8. interpretación elemental de las derivadas, incluido el Hessiano nulo de `P1`;
+9. conservación de autograd respecto de `z` sin gradientes hacia datos fijos;
+10. conservación del comportamiento previo de `G.reconstruct(z)`.

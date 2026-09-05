@@ -43,6 +43,11 @@ def main():
     field = problem.field(basis=basis)
     z = torch.sin(torch.linspace(0, 2 * math.pi, basis.dimension, dtype=field.dtype))
     result = field(z)
+    point = torch.tensor(vertices[simplices[0]].mean(axis=0)[None, :], dtype=field.dtype)
+    cell = torch.tensor([0], dtype=torch.int64)
+    value = field.reconstruct(z, point, cells=cell)
+    gradient = field.grad(z, point, cells=cell)
+    Hessian = field.hessian(z, point, cells=cell)
     print(
         json.dumps(
             {
@@ -54,6 +59,9 @@ def main():
                 "modes": basis.dimension,
                 "first_eigenvalues": basis.eigenvalues[:5].tolist(),
                 "field_norm": torch.linalg.vector_norm(result).item(),
+                "value_at_cell_center": value.tolist(),
+                "gradient_at_cell_center": gradient.tolist(),
+                "hessian_at_cell_center": Hessian.tolist(),
             },
             indent=2,
         )

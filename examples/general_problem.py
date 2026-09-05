@@ -26,6 +26,10 @@ def main():
     field = problem.field(basis=basis, quadrature=4)
     z = field.project(lambda x: x.sum(dim=1), quadrature=4)
     result = field(z)
+    points = torch.tensor([[0.2, 0.1, 0.1, 0.1]], dtype=field.dtype)
+    value = field.reconstruct(z, points)
+    gradient = field.grad(z, points)
+    Hessian = field.hessian(z, points)
     print(
         json.dumps(
             {
@@ -34,6 +38,9 @@ def main():
                 "input_shape": list(z.shape),
                 "output_shape": list(result.shape),
                 "field_norm": torch.linalg.vector_norm(result).item(),
+                "value": value.tolist(),
+                "gradient": gradient.tolist(),
+                "hessian": Hessian.tolist(),
             },
             indent=2,
         )
