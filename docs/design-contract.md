@@ -592,9 +592,9 @@ La implementación debe verificar al menos:
 La cuadratura del campo se controla con un solo argumento opcional:
 
 ```python
-G = problem.field(basis=basis)                    # automática
-G = problem.field(basis=basis, quadrature=10)     # orden fijo
-G = problem.field(basis=basis, quadrature=1e-8)   # tolerancia adaptativa
+G = problem.field(basis=basis)  # automática
+G = problem.field(basis=basis, quadrature=10)  # orden fijo
+G = problem.field(basis=basis, quadrature=1e-8)  # tolerancia adaptativa
 ```
 
 Un entero no negativo representa el grado polinómico que la regla debe integrar

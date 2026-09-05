@@ -83,8 +83,8 @@ La cuadratura usa un mapa de Duffy y reglas de Gauss-Jacobi en el simplejo de re
 No contiene tablas específicas para 1D, 2D o 3D. En el uso normal no hay que elegirla:
 
 ```python
-G = problem.field(basis=basis)                   # automática
-G = problem.field(basis=basis, quadrature=10)    # fija
+G = problem.field(basis=basis)  # automática
+G = problem.field(basis=basis, quadrature=10)  # fija
 G = problem.field(basis=basis, quadrature=1e-8)  # adaptativa
 ```
 
