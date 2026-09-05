@@ -162,6 +162,26 @@ z'(t) = G(z(t)),
 u_N(t) = Phi z(t).
 ```
 
+Para una tupla arbitraria de tamaños de lote `S=(S_1,...,S_r)` y un multiíndice
+`alpha`, la extensión tensorial no define un campo diferente: actúa componente a
+componente,
+
+```text
+(G_S(Z))_alpha = G(Z_alpha),
+Z in R^(S_1 x ... x S_r x N).
+```
+
+En consecuencia, `G_S` conserva todos los ejes anteriores al último y su diferencial
+es diagonal respecto de los índices de lote. La síntesis se extiende de la misma forma:
+
+```text
+(Phi_S Z)_alpha = Phi(Z_alpha).
+```
+
+La realización numérica es diferenciable respecto de cada `Z_alpha`. Las tablas de la
+geometría, la base, los coeficientes espaciales y la cuadratura representan parámetros
+fijos del operador y se mantienen fuera de ese grafo de diferenciación.
+
 La biblioteca construye y evalúa `G`; la integración de esta EDO es una operación
 posterior e independiente.
 

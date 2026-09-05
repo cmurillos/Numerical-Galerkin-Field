@@ -475,3 +475,111 @@ La implementación debe verificar al menos:
 7. detección de una falsa ortonormalidad producida por subintegración;
 8. persistencia exacta de los modos laplacianos y sus metadatos;
 9. igualdad `G_i(z)=a(Phi_N z;phi_i)` sin una corrección de masa posterior.
+
+## D-006 — Campo, lotes y diferenciación
+
+**Estado:** aceptada.
+
+### Objeto matemático
+
+Una vez fijadas la geometría, la forma débil y la base operacional, la construcción
+
+```python
+G = problem.field(basis=basis)
+```
+
+produce un campo autónomo y reutilizable
+
+```text
+G: R^N -> R^N,
+G_i(z) = a(Phi_N z; phi_i).
+```
+
+La geometría, la base, el orden de sus modos, los coeficientes espaciales, la forma
+débil y la cuadratura quedan fijados al construir `G`. Evaluar el campo no cambia esos
+datos ni integra una trayectoria temporal.
+
+### Contrato tensorial
+
+El último eje de la entrada contiene siempre las coordenadas de Galerkin. Todos los
+ejes anteriores son ejes de lote libres:
+
+```text
+z:    [*S,N],
+G(z): [*S,N],
+```
+
+donde `S` es cualquier tupla de tamaños, incluida la tupla vacía y tuplas con tamaños
+cero. Por tanto se admiten `[N]`, `[B,N]`, `[T,B,N]` y tensores de rango superior con
+una única regla. La evaluación equivale a aplicar el mismo campo a cada estado de
+forma independiente; la implementación puede aplanar temporalmente `S`, pero debe
+restaurarlo exactamente.
+
+No existen conversiones implícitas de listas, arreglos NumPy, dispositivo o precisión.
+La entrada es un tensor PyTorch con el mismo `dtype` y `device` que `G`. El campo admite
+`float32` y `float64`, y `G.to(device=..., dtype=...)` mueve en conjunto todas sus
+tablas fijas.
+
+### Reconstrucción
+
+Para los puntos de cuadratura ya tabulados por el campo,
+
+```python
+u = G.reconstruct(z)
+```
+
+preserva los mismos ejes de lote y devuelve
+
+```text
+[*S,Q,*value_shape].
+```
+
+En particular, una entrada `[N]` produce `[Q,*value_shape]`, sin introducir un eje de
+lote artificial. La localización y evaluación en puntos físicos arbitrarios requieren
+un contrato geométrico posterior y no forman parte de D-006.
+
+### Diferenciación
+
+La evaluación se expresa mediante operaciones PyTorch y conserva autograd respecto de
+`z`. Debe ser compatible con las transformaciones funcionales estándar:
+
+```python
+J = torch.func.jacrev(G)(z)
+_, Jw = torch.func.jvp(G, (z,), (w,))
+_, pullback = torch.func.vjp(G, z)
+```
+
+También se admiten derivadas de orden superior cuando las operaciones de la forma
+débil las poseen. Las funciones entregadas mediante `pointwise` deben ser puras, sin
+efectos laterales y estar escritas con operaciones PyTorch compatibles con esas
+transformaciones.
+
+No se conservan gradientes hacia la geometría, la base, los datos de cuadratura ni los
+`Coefficient`, pues todos ellos definen el operador fijo. D-006 no añade parámetros
+variables en tiempo de evaluación.
+
+### Separación de responsabilidades
+
+Construir `G` puede ensamblar, integrar, validar y tabular. Llamar `G(z)` sólo evalúa el
+campo ya preparado. El núcleo no resuelve
+
+```text
+z'(t)=G(z(t)),
+```
+
+no recibe el tiempo y no impone un integrador. La evolución temporal sigue siendo una
+operación posterior e independiente.
+
+## Criterios de aceptación de D-006
+
+La implementación debe verificar al menos:
+
+1. conservación exacta de entradas y salidas `[*S,N]` para varios rangos de `S`;
+2. equivalencia entre la evaluación tensorial y la evaluación estado por estado;
+3. soporte de lotes con tamaños cero;
+4. reconstrucción con forma `[*S,Q,*value_shape]`;
+5. equivalencia entre `G(batch)` y `torch.vmap(G)(batch)`;
+6. jacobianos, JVP, VJP y derivadas de segundo orden mediante `torch.func`;
+7. ejecución en `float32`, `float64`, CPU y, cuando esté disponible, CUDA;
+8. rechazo de entradas con dimensión, tipo, precisión o dispositivo incompatibles.
+

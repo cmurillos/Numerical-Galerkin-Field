@@ -298,7 +298,12 @@ class GalerkinProblem:
 
 
 class GalerkinField:
-    """The coordinate velocity G_i(z) = a(Phi z; phi_i) in an orthonormal basis."""
+    """The differentiable coordinate field ``G: [..., N] -> [..., N]``.
+
+    Every leading axis is a batch axis. Geometry, basis, coefficients and quadrature
+    tables are fixed at construction; differentiation is preserved only with respect
+    to the state coordinates.
+    """
 
     def __init__(
         self,
@@ -411,21 +416,20 @@ class GalerkinField:
         return self
 
     def reconstruct(self, z, *, boundary=None):
-        z, _ = self._states(z)
+        """Reconstruct ``Phi z`` as ``[..., Q, *value_shape]`` on a prepared measure."""
+        z, batch_shape = self._states(z)
         table = self._volume if boundary is None else self._boundary[boundary]
-        return torch.einsum("bn,qn...->bq...", z, table.basis[0])
+        values = torch.einsum("bn,qn...->bq...", z, table.basis[0])
+        return values.reshape((*batch_shape, len(table.points), *self.value_shape))
 
     def _states(self, z):
         if not isinstance(z, torch.Tensor):
             raise TypeError("States must be torch tensors.")
-        single = z.ndim == 1
-        if single:
-            z = z.unsqueeze(0)
-        if z.ndim != 2 or z.shape[1] != self.dimension:
-            raise ValueError(f"Expected [B,{self.dimension}] or [{self.dimension}].")
+        if z.ndim < 1 or z.shape[-1] != self.dimension:
+            raise ValueError(f"Expected a state tensor with shape [...,{self.dimension}].")
         if z.device != self.device or z.dtype != self.dtype:
             raise ValueError("States and field tables must share device and dtype.")
-        return z, single
+        return z.reshape(-1, self.dimension), z.shape[:-1]
 
     def _action(self, z, test):
         result = z.new_zeros((len(z), test.stop - test.start))
@@ -458,9 +462,9 @@ class GalerkinField:
         return result
 
     def __call__(self, z):
-        z, single = self._states(z)
+        z, batch_shape = self._states(z)
         if not len(z):
-            return z.clone()[0] if single else z.clone()
+            return z.clone().reshape((*batch_shape, self.dimension))
         denominator = max(1, len(z) * max(1, len(self._volume.points)))
         chunk = max(1, min(self.dimension, self.max_intermediate_entries // denominator))
         action = torch.cat(
@@ -470,4 +474,4 @@ class GalerkinField:
             ],
             dim=1,
         )
-        return action[0] if single else action
+        return action.reshape((*batch_shape, self.dimension))

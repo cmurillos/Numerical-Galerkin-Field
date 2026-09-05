@@ -294,6 +294,46 @@ distancias euclídeas en coordenadas son las distancias funcionales L2. El paque
 evalúa este campo y conserva autograd respecto de `z`; no integra una evolución
 temporal.
 
+## Evaluación tensorial y diferenciación
+
+El último eje siempre contiene los `N` coeficientes. Todos los ejes anteriores se
+conservan como ejes de lote:
+
+```python
+velocity = G(z)  # [N] -> [N]
+velocities = G(states)  # [B,N] -> [B,N]
+grid_velocities = G(grid)  # [T,B,N] -> [T,B,N]
+```
+
+Esto equivale a evaluar el mismo campo de forma independiente en cada estado. También
+se preservan lotes de rango superior y tamaños cero. `G.reconstruct(z)` reemplaza el
+último eje de coeficientes por los puntos de cuadratura y la forma del valor:
+
+```text
+[*S,N] -> [*S,Q,*value_shape].
+```
+
+La entrada debe ser un tensor PyTorch con el mismo dispositivo y precisión que `G`;
+no se realizan conversiones silenciosas. Para cambiar ambos de forma explícita:
+
+```python
+G.to(device="cuda", dtype=torch.float64)
+z = z.to(device=G.device, dtype=G.dtype)
+```
+
+El campo funciona directamente con las transformaciones de PyTorch:
+
+```python
+J = torch.func.jacrev(G)(z)
+_, Jw = torch.func.jvp(G, (z,), (w,))
+value, pullback = torch.func.vjp(G, z)
+```
+
+Las funciones usadas en `pointwise` deben estar escritas con operaciones PyTorch
+puras y compatibles con `torch.func`. La diferenciación se conserva respecto de `z`,
+pero no respecto de la geometría, la base, los `Coefficient` ni la cuadratura ya
+tabulada.
+
 ## Campos vectoriales y tensoriales
 
 ```python
