@@ -1,11 +1,12 @@
 """General weak Galerkin fields on user-supplied bases and simplicial domains."""
 
 from dataclasses import dataclass
+from math import prod
 from numbers import Integral, Real
 
 import torch
 
-from .forms import build_form, coefficient_expressions, derivative_orders, evaluate
+from .forms import Coefficient, build_form, coefficient_expressions, derivative_orders, evaluate
 from .geometry import SimplicialDomain, positive_integer
 from .spaces import TransformedBasis
 
@@ -216,6 +217,14 @@ def _calibration_states(dimension, *, device, dtype):
     )
 
 
+def _projection_exact_order(source, basis):
+    basis_degree = _basis_polynomial_degree(basis)
+    if basis_degree is None or not isinstance(source, Coefficient):
+        return None
+    source_degree = {"cell": 0, "vertex": 1}.get(source.location)
+    return None if source_degree is None else basis_degree + source_degree
+
+
 class GalerkinProblem:
     """A simplicial geometry plus one complete weak form.
 
@@ -410,6 +419,7 @@ class GalerkinField:
             raise ValueError("Use torch.float32 or torch.float64.")
         value_shape = _basis_contract(problem, basis)
         max_quadrature_points = positive_integer(max_quadrature_points, "max_quadrature_points")
+        self.max_quadrature_points = max_quadrature_points
         self.max_intermediate_entries = positive_integer(
             max_intermediate_entries, "max_intermediate_entries"
         )
@@ -430,6 +440,7 @@ class GalerkinField:
             "basis quadrature order",
             0,
         )
+        self._basis_quadrature_order = baseline
         exact = _exact_quadrature_order(self.form, basis) if mode == "automatic" else None
         if mode == "fixed":
             self._prepare(target)
@@ -573,6 +584,113 @@ class GalerkinField:
         table = self._volume if boundary is None else self._boundary[boundary]
         values = torch.einsum("bn,qn...->bq...", z, table.basis[0])
         return values.reshape((*batch_shape, len(table.points), *self.value_shape))
+
+    def _projection_table(self, order):
+        if order == self.quadrature_order:
+            return self._volume
+        return _table(
+            self.problem.geometry,
+            self.basis,
+            {0},
+            set(),
+            order,
+            None,
+            None,
+            None,
+            self.max_quadrature_points,
+            self.device,
+            self.dtype,
+        )
+
+    def _project_on_table(self, source, table):
+        if isinstance(source, Coefficient):
+            values = source.tabulate(
+                self.problem.geometry,
+                table.points,
+                table.cells,
+                table.barycentric,
+            )
+        else:
+            values = source(table.points)
+            try:
+                values = torch.as_tensor(values)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "The projected function must return a real numerical tensor."
+                ) from exc
+            if torch.is_complex(values):
+                raise ValueError("The projected function must be real-valued.")
+            values = values.to(device=self.device, dtype=self.dtype)
+
+        physical_rank = len(self.value_shape)
+        point_axis = values.ndim - physical_rank - 1
+        physical_shape = tuple(values.shape[-physical_rank:]) if physical_rank else ()
+        if (
+            point_axis < 0
+            or values.shape[point_axis] != len(table.points)
+            or physical_shape != self.value_shape
+        ):
+            expected = f"[*S,{len(table.points)},*{self.value_shape}]"
+            raise ValueError(
+                f"The projected function must return {expected}; got {tuple(values.shape)}."
+            )
+        if not torch.isfinite(values).all():
+            raise ValueError("The projected function returned nonfinite values.")
+
+        batch_shape = tuple(values.shape[:point_axis])
+        batch_size = prod(batch_shape)
+        physical_size = prod(self.value_shape)
+        flattened = values.reshape(batch_size, len(table.points), physical_size)
+        modes = table.basis[0].reshape(len(table.points), self.dimension, physical_size)
+        result = torch.einsum("bqd,qnd,q->bn", flattened, modes, table.weights)
+        return result.reshape((*batch_shape, self.dimension))
+
+    def project(self, source, *, quadrature=None):
+        """Return the L2 coordinates of a callable or ``Coefficient`` in the fixed basis."""
+        if not isinstance(source, Coefficient) and not callable(source):
+            raise TypeError("project expects a callable function or a Coefficient.")
+        mode, target = _quadrature_specification(quadrature, self.dtype)
+        exact = _projection_exact_order(source, self.basis) if mode == "automatic" else None
+        if mode == "fixed":
+            return self._project_on_table(source, self._projection_table(target))
+        if exact is not None:
+            order = max(self._basis_quadrature_order, exact)
+            return self._project_on_table(source, self._projection_table(order))
+
+        if self._basis_quadrature_order > _MAX_ADAPTIVE_ORDER:
+            raise ValueError(
+                f"The basis requires order {self._basis_quadrature_order}, above the adaptive "
+                f"limit {_MAX_ADAPTIVE_ORDER}. Use a fixed integer order."
+            )
+        previous = None
+        for order in range(self._basis_quadrature_order, _MAX_ADAPTIVE_ORDER + 1, 2):
+            try:
+                current = self._project_on_table(source, self._projection_table(order))
+            except ValueError as exc:
+                if "exceeds max_points" in str(exc):
+                    raise ValueError(
+                        "Adaptive projection exhausted max_quadrature_points before reaching "
+                        f"tolerance {target:.3e}. Use a fixed integer order."
+                    ) from exc
+                raise
+            if not current.numel():
+                raise ValueError(
+                    "Adaptive projection cannot calibrate an empty batch; use a fixed integer order."
+                )
+            detached = current.detach()
+            if previous is not None:
+                if detached.shape != previous.shape:
+                    raise ValueError(
+                        "The projected function changed batch shape during adaptation."
+                    )
+                error = torch.max(torch.abs(detached - previous) / (1 + torch.abs(detached)))
+                if float(error.item()) <= target:
+                    return current
+            previous = detached
+        raise ValueError(
+            f"Adaptive projection did not reach tolerance {target:.3e} by order "
+            f"{_MAX_ADAPTIVE_ORDER}. Use a fixed integer order."
+        )
 
     def _states(self, z):
         if not isinstance(z, torch.Tensor):

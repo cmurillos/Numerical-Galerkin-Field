@@ -303,6 +303,37 @@ distancias euclídeas en coordenadas son las distancias funcionales L2. El paque
 evalúa este campo y conserva autograd respecto de `z`; no integra una evolución
 temporal.
 
+## Proyección de una función
+
+Para obtener los coeficientes de una condición inicial o de cualquier función física:
+
+```python
+u0 = lambda x: torch.sin(x[:, 0])
+z0 = G.project(u0)
+velocity = G(z0)
+u0_projected = G.reconstruct(z0)
+```
+
+`G.project` calcula `z_i=<u0,phi_i>`. La ortonormalidad evita una corrección con la
+matriz de masa. También se aceptan `Coefficient(function)`, `Coefficient.cell(values)`
+y `Coefficient.vertex(values)`.
+
+Una función con lotes devuelve `[*S,Q,*value_shape]` y la proyección conserva los ejes
+libres como `[*S,N]`. No se aceptan valores crudos asociados implícitamente a los puntos
+internos de cuadratura.
+
+La selección de cuadratura mantiene la misma interfaz compacta:
+
+```python
+z0 = G.project(u0)  # automática
+z0 = G.project(u0, quadrature=10)  # fija
+z0 = G.project(u0, quadrature=1e-8)  # adaptativa
+```
+
+Una función PyTorch conserva autograd respecto de sus parámetros. Un `Coefficient` es
+un dato fijo y se mantiene fuera del grafo. La proyección no modifica la base, el campo
+ni sus tablas.
+
 ## Evaluación tensorial y diferenciación
 
 El último eje siempre contiene los `N` coeficientes. Todos los ejes anteriores se

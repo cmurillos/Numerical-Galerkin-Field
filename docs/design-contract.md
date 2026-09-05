@@ -670,3 +670,114 @@ La implementación debe verificar al menos:
 6. registro del modo, orden, tolerancia y error estimado;
 7. fallo explícito al agotar el orden o el presupuesto de puntos;
 8. aplicación conjunta a integrales de volumen y de frontera.
+
+## D-008 — Proyección a coordenadas de Galerkin
+
+**Estado:** aceptada.
+
+### Objeto matemático
+
+Para una función real `u` con la misma forma de valor que la base operacional, se
+define
+
+```text
+P_N u = sum_i z_i phi_i,
+z_i = <u,phi_i>_L2.
+```
+
+Como la base es ortonormal, `z` se obtiene directamente mediante esos productos
+internos. No se ensambla ni se invierte una matriz de masa. Además,
+
+```text
+norm(u-P_N u)_L2 = inf_{w in V_N} norm(u-w)_L2,
+```
+
+y proyectar una función que ya tiene coordenadas `z` en `V_N` recupera las mismas
+coordenadas, salvo el error de cuadratura.
+
+### Interfaz compacta
+
+El campo preparado ofrece un único método nuevo:
+
+```python
+z0 = G.project(u0)
+dz0 = G(z0)
+u0N = G.reconstruct(z0)
+```
+
+`project` acepta una función evaluable o cualquiera de las representaciones espaciales
+fijas acordadas en D-004:
+
+```python
+z0 = G.project(lambda x: torch.sin(x[:, 0]))
+z0 = G.project(Coefficient(function, shape=value_shape))
+z0 = G.project(Coefficient.cell(values))
+z0 = G.project(Coefficient.vertex(values))
+```
+
+No acepta un arreglo crudo de valores en puntos de cuadratura, pues ese arreglo no
+identifica por sí mismo los puntos, la regla ni la geometría que representa.
+
+### Contrato tensorial
+
+La función recibe puntos `x:[Q,p]`. Para un lote arbitrario `S`, devuelve
+
+```text
+u(x): [*S,Q,*value_shape]
+```
+
+y la proyección produce
+
+```text
+G.project(u): [*S,N].
+```
+
+Una función individual usa `S=()`. Un `Coefficient` describe una sola función y por
+tanto produce `[N]`. Los valores deben ser reales, finitos y tener exactamente la forma
+física de la base. Los lotes vacíos se admiten con cuadratura fija; una adaptación no
+puede estimar un error a partir de un lote vacío y lo rechaza explícitamente.
+
+### Cuadratura
+
+La proyección reutiliza sin variaciones el lenguaje de D-007:
+
+```python
+z0 = G.project(u0)  # automática
+z0 = G.project(u0, quadrature=10)  # fija
+z0 = G.project(u0, quadrature=1e-8)  # adaptativa
+```
+
+Para `Coefficient.cell` y `Coefficient.vertex`, una base polinómica reconocida permite
+inferir un orden exacto. Una función Python o `Coefficient(function)` se considera en
+general no polinómica y activa la adaptación. En este caso se comparan directamente
+las coordenadas obtenidas con `q` y `q+2`; no hacen falta estados de calibración porque
+la función que se está proyectando ya está determinada.
+
+La cuadratura usada por `project` es temporal e independiente de la empleada para
+construir el campo. La operación no altera `quadrature_order`, las tablas, la base ni
+ningún otro dato de `G`.
+
+### Diferenciación y alcance
+
+Si una función Python devuelve operaciones PyTorch dependientes de parámetros con
+gradiente, la proyección final conserva autograd respecto de esos parámetros. Los
+`Coefficient` mantienen el contrato fijo de D-004 y se proyectan separados del grafo.
+La selección adaptativa del orden es una decisión numérica discreta; la diferenciación
+corresponde a la integral evaluada con el orden finalmente seleccionado.
+
+`G.reconstruct(z)` continúa evaluando exclusivamente en los puntos ya preparados por
+el campo. La localización y evaluación en puntos físicos arbitrarios se reserva para
+D-009. D-008 tampoco integra la ecuación temporal ni modifica el espacio `V_N`.
+
+### Criterios de aceptación de D-008
+
+La implementación debe verificar al menos:
+
+1. identidad entre proyección y síntesis para funciones pertenecientes a `V_N`;
+2. proyección de funciones escalares, vectoriales y tensoriales;
+3. conservación de ejes de lote arbitrarios;
+4. soporte de `Coefficient` por función, simplex y vértice;
+5. cuadratura automática, fija y adaptativa con el contrato de D-007;
+6. conservación de autograd para funciones PyTorch;
+7. inmutabilidad de la base y de las tablas del campo;
+8. rechazo de valores crudos, complejos, no finitos o con forma incompatible.

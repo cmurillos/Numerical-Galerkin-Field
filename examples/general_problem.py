@@ -24,7 +24,7 @@ def main():
     )
     basis = problem.basis("laplacian", size=5, degree=1)
     field = problem.field(basis=basis, quadrature=4)
-    z = torch.linspace(-0.2, 0.2, basis.dimension, dtype=field.dtype)
+    z = field.project(lambda x: x.sum(dim=1), quadrature=4)
     result = field(z)
     print(
         json.dumps(
