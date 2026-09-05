@@ -904,3 +904,97 @@ La implementación debe verificar al menos:
 8. interpretación elemental de las derivadas, incluido el Hessiano nulo de `P1`;
 9. conservación de autograd respecto de `z` sin gradientes hacia datos fijos;
 10. conservación del comportamiento previo de `G.reconstruct(z)`.
+
+## D-010 — Aproximación continua de datos discontinuos
+
+**Estado:** aceptada para el alcance actual.
+
+### Decisión
+
+El núcleo no introduce todavía trazas dobles ni integrales sobre caras interiores. Una
+función física discontinua se lleva al espacio operacional continuo mediante la
+proyección ortogonal ya definida en D-008:
+
+```text
+P_N u = sum_i <u,phi_i>_L2 phi_i.
+```
+
+Aunque `u` sea discontinua, cada aproximación `P_N u` es continua cuando la base lo es.
+La propiedad relevante es
+
+```text
+norm(u-P_N u)_L2 = inf_{w in V_N} norm(u-w)_L2.
+```
+
+Por tanto no se suavizan manualmente los datos ni se modifica la base durante la
+evolución. La discontinuidad queda representada mediante una transición continua cuya
+resolución depende del espacio fijo `V_N`.
+
+### Interfaz
+
+No se añade una nueva llamada pública. Para una discontinuidad alineada con la malla,
+la representación preferida es exacta por simplex:
+
+```python
+u0 = Coefficient.cell(cell_values)
+z0 = G.project(u0)
+u0N = G.reconstruct(z0, points)
+```
+
+Una discontinuidad general también puede darse mediante una función PyTorch:
+
+```python
+z0 = G.project(lambda x: (x[:, 0] < 0.5).to(G.dtype), quadrature=20)
+```
+
+Cuando el salto corta el interior de los simplejos, la cuadratura deja de ser
+polinómica a trozos respecto de esa malla. El usuario debe refinar la malla, emplear
+una tolerancia adaptativa que converja o fijar un orden comprobado. La adaptación de
+D-007 estima la integral numérica, pero no convierte esa estimación en una cota
+uniforme del error de aproximación funcional.
+
+### Alcance matemático
+
+La convergencia de aproximaciones continuas a una función con saltos se entiende aquí
+en `L2`. No se promete convergencia puntual sobre el salto. Bases globales pueden
+mostrar oscilaciones de Gibbs y una base local concentra el error en una vecindad de
+la interfaz que disminuye al refinar el espacio.
+
+Una función con un salto verdadero no pertenece en general a `H1`. Si la forma débil
+requiere `grad(u)`, la norma de los gradientes de aproximaciones continuas puede crecer
+al intentar resolver el salto. D-010 no afirma convergencia en `H1` ni reemplaza las
+hipótesis funcionales exigidas por la ecuación concreta. Para problemas difusivos, el
+suavizado de la evolución puede hacer suficiente esta representación; para choques
+persistentes o interfaces físicas, puede no serlo.
+
+`ds.interior` continúa produciendo un error explícito. No existen por ahora
+`u.minus`, `u.plus`, saltos, promedios, flujos numéricos ni penalizaciones automáticas.
+Esto evita asignar una semántica de Galerkin discontinuo a una formulación que todavía
+usa un único valor reconstruido.
+
+### Mejora futura
+
+Si los experimentos requieren discontinuidades persistentes, el contrato deberá
+extenderse sin cambiar la API ya aceptada. La extensión futura incluirá:
+
+1. enumeración y etiquetado de caras interiores;
+2. dos simplejos padres y dos trazas para estado, prueba y coeficientes;
+3. dos conormales exteriores, necesarias también en complejos embebidos;
+4. una medida `ds.interior` compatible con regiones nombradas;
+5. primitivas explícitas para construir saltos, promedios y flujos conservativos;
+6. bases discontinuas ortonormales y reglas de cuadratura por cara;
+7. pruebas de conservación, orientación e invariancia frente a la numeración.
+
+Esta extensión correspondería a un contrato posterior de Galerkin discontinuo; no se
+implementará silenciosamente dentro de D-010.
+
+### Criterios de aceptación de D-010
+
+La implementación debe verificar al menos:
+
+1. proyección de valores constantes por simplex sobre una base continua;
+2. unicidad de la reconstrucción en una cara compartida;
+3. reducción del error `L2` al refinar un espacio continuo local;
+4. conservación de autograd respecto de parámetros de una función PyTorch;
+5. rechazo explícito ya existente de `ds.interior`;
+6. ausencia de nuevas clases de condición de frontera o integración temporal.

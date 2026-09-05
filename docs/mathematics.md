@@ -198,6 +198,18 @@ fijos del operador y se mantienen fuera de ese grafo de diferenciación.
 La biblioteca construye y evalúa `G`; la integración de esta EDO es una operación
 posterior e independiente.
 
+Una función discontinua de `L2` puede proyectarse sobre una sucesión de espacios
+continuos. Cada proyección es continua y puede converger a la función original en
+`L2`, sin converger puntualmente sobre el salto. Esta es la convención actual de
+D-010. No implica convergencia en `H1`: un salto verdadero no posee en general un
+gradiente débil en `L2`, y las normas de los gradientes de sus aproximaciones continuas
+pueden crecer.
+
+Por ello el soporte actual es adecuado cuando la métrica relevante es `L2` o la
+evolución regulariza los datos. Si el modelo conserva choques o prescribe leyes de
+interfaz, será necesario introducir en el futuro espacios rotos, trazas laterales e
+integrales sobre caras interiores.
+
 Este contrato sólo integra en los elementos máximos y en la frontera exterior. Las
 caras interiores requieren distinguir las dos trazas incidentes y fijar convenciones
 de salto, promedio y orientación; se mantienen reservadas hasta definir ese contrato.

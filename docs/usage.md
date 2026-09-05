@@ -175,8 +175,10 @@ preserva autograd respecto de `z`. Si se necesita `grad` de un coeficiente exter
 una caja negra `pointwise`, su derivada se expresa por separado: el núcleo no intenta
 diferenciarla espacialmente.
 
-Las caras interiores están reservadas para un contrato posterior. `ds.interior` falla
-de forma explícita hasta definir trazas, saltos, promedios y orientación.
+Las caras interiores no forman parte del alcance actual. `ds.interior` falla de forma
+explícita: D-010 aproxima datos discontinuos dentro de un espacio continuo. Una futura
+extensión de Galerkin discontinuo deberá definir por separado trazas, saltos, promedios
+y orientación.
 
 ## Bases ortonormales
 
@@ -333,6 +335,39 @@ z0 = G.project(u0, quadrature=1e-8)  # adaptativa
 Una función PyTorch conserva autograd respecto de sus parámetros. Un `Coefficient` es
 un dato fijo y se mantiene fuera del grafo. La proyección no modifica la base, el campo
 ni sus tablas.
+
+## Aproximación continua de una discontinuidad
+
+Una discontinuidad alineada con las caras de la malla se describe naturalmente con un
+valor por simplex y se proyecta sobre la base continua fija:
+
+```python
+u0 = Coefficient.cell([1.0, 1.0, 0.0, 0.0])
+z0 = G.project(u0)
+
+points = torch.tensor([[0.49], [0.50], [0.51]], dtype=G.dtype, device=G.device)
+approximation = G.reconstruct(z0, points)
+```
+
+`G.project` produce la mejor aproximación en `L2` dentro de `V_N`. El resultado tiene
+una sola traza continua en la interfaz; no se preserva un salto exacto. Al refinar una
+base local, la transición se concentra en una región menor. Con bases globales pueden
+aparecer oscilaciones de Gibbs.
+
+Para un salto que no coincide con la malla se puede entregar una función y comprobar
+la cuadratura explícitamente:
+
+```python
+z0 = G.project(
+    lambda x: (x[:, 0] < 0.5).to(G.dtype),
+    quadrature=20,
+)
+```
+
+Esta aproximación se interpreta en `L2`. Si la formulación exige `grad(u)`, un salto
+verdadero puede quedar fuera de `H1` y requerir cada vez gradientes mayores. Los
+choques persistentes, fracturas o contactos imperfectos motivarán en el futuro un
+contrato separado para Galerkin discontinuo y `ds.interior`.
 
 ## Evaluación en puntos físicos
 

@@ -23,7 +23,7 @@ def save_basis(path: str | Path, basis: GalerkinBasis, *, overwrite=False) -> No
     boundaries = basis.fem.domain.mesh.boundaries
     metadata = {
         "schema": _SCHEMA,
-        "ngfield_version": "0.5.0",
+        "ngfield_version": "0.6.0",
         "skfem_version": skfem.__version__,
         "numpy_version": np.__version__,
         "scipy_version": scipy.__version__,
