@@ -1,5 +1,11 @@
 # Contrato matemático
 
+Este documento describe la geometría, el espacio y el significado del campo. La
+[guía de uso](usage.md) contiene la sintaxis actual; el [contrato D-013](design-contract.md#d-013--contrato-de-uso-con-espacio-admisible-explícito)
+y la [migración](migration.md) precisan las capacidades implementadas y la
+compatibilidad. Las igualdades de proyección e isometría se formulan primero con
+productos internos exactos; la implementación los aproxima por cuadratura.
+
 ## Geometría
 
 Sean `P` una matriz de `M` puntos de R^p y `T` una matriz de índices con `k+1`
@@ -48,6 +54,12 @@ Las etiquetas de `boundaries` seleccionan facetas exteriores y las etiquetas de
 `regions` seleccionan símplices máximos. No imponen interpretaciones físicas. Por ello
 `ds("Gamma")` y `dx("Omega_1")` sólo restringen la medida a los elementos nombrados.
 
+Para k=1, las caras son puntos y ds usa la medida cero-dimensional de conteo, con
+peso uno por extremo. Que estos puntos tengan medida de longitud cero no hace que
+su integral de frontera sea cero. Las regiones seleccionan simplejos máximos y las
+fronteras seleccionan caras exteriores; esto no constituye una API de integración
+sobre cualquier subconjunto de cualquier codimensión.
+
 Si `Q_e` contiene una base ortonormal de la imagen de `B_e`, el proyector tangencial es
 
 ```text
@@ -73,18 +85,41 @@ parte necesaria de la evaluación.
 
 ## Espacio y base
 
-Sea H = L2(Omega_h; R^s), donde `s` puede reemplazarse por una forma tensorial
-arbitraria. El usuario suministra funciones linealmente independientes
+En el recorrido con Space, sea `H=L2(Omega_h;R^c)`, donde c es el número de
+componentes físicas. Su producto interno es
 
 ```text
-phi_1, ..., phi_N in H,
-V_N = span{phi_1, ..., phi_N}.
+(u,v)_H = integral_Omega_h sum_(r=0)^(c-1) u_r v_r dmu_k.
 ```
 
-La familia contiene toda restricción que defina el espacio admisible. La interfaz central
-no interpreta tipos de condición de frontera. Las condiciones naturales se expresan
-en la forma débil; las restricciones esenciales, periódicas, de simetría o de otra
-clase pueden incorporarse al construir las funciones `phi_i`.
+`Space` describe un subespacio V de H con regularidad común y restricciones
+lineales homogéneas. Por ejemplo,
+
+```text
+V = {u in H1(Omega_h;R^c): trace(u_0)|Gamma_D = 0},
+V = {u in H1(0,1): u(0)=u(1), integral_0^1 u dx=0}.
+```
+
+El descriptor acepta un orden Sobolev entero, pero `V.basis` implementa sólo órdenes
+cero y uno. Una declaración de regularidad no certifica un evaluador arbitrario.
+Se construyen o suministran funciones linealmente independientes
+
+```text
+phi_1, ..., phi_N in V,
+V_N = span{phi_1, ..., phi_N} subset V subset H.
+```
+
+La familia satisface las restricciones esenciales e integrales declaradas. Las
+construcciones nodales admiten `ZeroTrace`, `Periodic` y `MeanZero`, y aplican sus
+restricciones antes del espectro y de la ortonormalización. Otras restricciones
+pueden estar codificadas en una fuente externa, pero no tienen un constructor
+declarativo general. Las condiciones naturales permanecen en la forma débil.
+
+La regularidad de fuentes programables queda declarada por el usuario cuando no
+existe una representación verificable. En particular, muestrear unos puntos no
+certifica una condición sobre toda una cara. La interfaz anterior con
+`GalerkinProblem` conserva valores escalares `()` y formas tensoriales arbitrarias;
+Space siempre usa la forma `(c,)`, incluso `(1,)`.
 
 La base operacional es real, fija y ortonormal. Al preparar el campo, sus valores y
 derivadas se tabulan y se separan del grafo de diferenciación. Autograd actúa sobre los
@@ -109,6 +144,18 @@ En consecuencia, `Phi` es una isometría, `norm(Phi z)_H=norm(z)_2`, y la bola f
 una familia no ortonormal. El producto interno no puede sustituirse después mediante
 una matriz arbitraria.
 
+Para una base no exactamente ortonormal, el Gram exacto es
+`M_ij=(phi_j,phi_i)_H` y se tiene `norm(Phi z)_H^2=z^T M z`. Por tanto, la isometría
+exacta requiere M=I. El Gram que consulta el programa como `G.mass_matrix` usa
+cuadratura: su proximidad a I es una verificación numérica, no una certificación
+de todas las integrales exactas. Construir G no normaliza otra vez la base ni
+cambia sus coordenadas.
+
+La pertenencia de `V_N` a un espacio de media cero no demuestra que la EDP preserve
+la media. Para interpretar esa restricción como invariante deben ser compatibles
+las fuentes y los flujos. De lo contrario, Galerkin sobre ese espacio define una
+dinámica restringida diferente de la proyección sin esa condición adicional.
+
 ## Forma débil y campo reducido
 
 La función Python describe una única aplicación
@@ -117,8 +164,12 @@ La función Python describe una única aplicación
 a: D_a x V_N -> R,
 ```
 
-posiblemente no lineal en el estado `u` y lineal en la función de prueba `v`. Una
-expresión puede contener integrales de volumen y de frontera:
+posiblemente no lineal en el estado `u` y lineal en la función de prueba `v`.
+Aquí D_a es el conjunto de estados para los que la forma está definida; en el caso
+homogéneo debe contener V_N. Su elección analítica depende de la EDP y no se deduce
+únicamente de los tensores que acepta el programa.
+
+Una expresión puede contener integrales de volumen y de frontera:
 
 ```text
 a(u;v)
@@ -153,6 +204,11 @@ El campo de Galerkin es directamente la velocidad coordenada
 G(z) = g(z).
 ```
 
+Estas fórmulas usan la base ortonormal y la forma exacta. La realización computable
+reemplaza las integrales de a por la cuadratura fijada al preparar el campo; evaluar
+G no adapta de nuevo la regla. Las tolerancias del Gram y del ensamblaje forman
+parte de la aproximación numérica.
+
 Equivalentemente, la función
 
 ```text
@@ -174,6 +230,21 @@ Una trayectoria de Galerkin satisface
 z'(t) = G(z(t)),
 u_N(t) = Phi z(t).
 ```
+
+Con Dirichlet fija no homogénea se utiliza un levantamiento fijo ell y el espacio
+homogéneo de variaciones V. Entonces
+
+```text
+T(t) = ell + Phi z(t),
+G_i(z) = a(ell + Phi z; phi_i),
+z_i(0) = (T0-ell, phi_i)_H.
+```
+
+D_a debe contener `ell+V_N`. No aparece `d_t ell` y G sigue siendo autónomo. El
+paquete deja el levantamiento explícito en la forma, la proyección y la reconstrucción.
+La isometría se aplica a las variaciones y a diferencias de estados; en general
+`norm(ell+Phi z)_H` no es `norm(z)_2`. Los datos dependientes del tiempo y las
+geometrías móviles quedan fuera de este contrato implementado.
 
 Para una tupla arbitraria de tamaños de lote `S=(S_1,...,S_r)` y un multiíndice
 `alpha`, la extensión tensorial no define un campo diferente: actúa componente a

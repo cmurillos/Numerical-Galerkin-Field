@@ -4,10 +4,12 @@ Este documento registra decisiones estables de Numerical Galerkin Field. Una dec
 aceptada sólo cambia mediante una revisión explícita del contrato.
 
 D-001 a D-012 describen el contrato de la versión 0.9.0. D-013 registra el contrato
-de uso aprobado para la próxima evolución de la API. Sus partes 1 a 7 están
+de uso aprobado para la próxima evolución de la API. Sus partes 1 a 8 están
 implementadas en esta rama, desde `Space` y sus bases restringidas hasta la
-construcción directa de G y sus ejemplos de aceptación. La parte 8 sigue pendiente;
-estas ampliaciones todavía no pertenecen a la versión publicada 0.9.0.
+construcción directa de G, sus ejemplos de aceptación y la guía de migración.
+Estas ampliaciones todavía no pertenecen a la versión original 0.9.0. D-002 y D-005
+describen también las rutas anteriores que siguen disponibles; el recorrido actual
+se expone en D-013 y en la [guía de uso](usage.md).
 
 ## D-001 — Bases fijas
 
@@ -28,7 +30,7 @@ coeficientes `z`, no respecto de los parámetros usados para definir la base.
 
 **Estado:** aceptada.
 
-Esta es la interfaz disponible en 0.9.0. D-013 define el recorrido futuro basado en un
+Esta es la interfaz disponible en 0.9.0. D-013 define el recorrido implementado basado en un
 espacio admisible explícito; su parte 6 implementa la entrada directa del campo
 y conserva la compatibilidad de las interfaces anteriores.
 
@@ -422,11 +424,15 @@ entrenamiento.
 
 ```text
 laplacian       modos geométricos ordenados; opción general predeterminada;
-polynomial      monomios por grado total, restringidos y ortonormalizados;
-fourier         senos y cosenos reales, restringidos y ortonormalizados;
+polynomial      monomios por grado total sobre la geometría, ortonormalizados;
+fourier         senos y cosenos reales sobre la geometría, ortonormalizados;
 finite-element  espacio Lagrange completo ortonormalizado;
 custom          una familia suministrada por el usuario y ortonormalizada.
 ```
+
+En estas dos familias, restringir funciones al dominio geométrico no impone
+condiciones esenciales ni identificaciones periódicas. D-013 precisa las
+combinaciones implementadas de familias y restricciones declarativas.
 
 Una futura base POD basada en snapshots queda fuera de D-005 hasta acordar el contrato
 de esos datos.
@@ -443,9 +449,13 @@ ortonormalización.
 Una familia cruda se prepara explícitamente:
 
 ```python
-admissible = TransformedBasis(raw_basis, constraints)
+admissible = TransformedBasis(raw_basis, transform)
 basis = problem.orthonormalize(admissible)
 ```
+
+Las columnas de `transform:[raw_basis.dimension,N]` describen la nueva familia en
+coordenadas de la fuente. Si C contiene ecuaciones `C c=0`, se construye una base
+de su núcleo para usarla como transformación; C no es directamente ese argumento.
 
 Si `M=L L^T`, se usa la transformación `L^(-T)`. La operación devuelve un objeto nuevo
 y nunca cambia silenciosamente las coordenadas de una base existente.
@@ -1212,7 +1222,7 @@ La implementación debe verificar al menos:
 
 ## D-013 — Contrato de uso con espacio admisible explícito
 
-**Estado:** contrato de uso aceptado; partes 1 a 7 completadas en esta rama.
+**Estado:** contrato de uso aceptado; partes 1 a 8 completadas en esta rama.
 
 ### Alcance y objetivo
 
@@ -1752,6 +1762,26 @@ numéricos como parte de la suite y del CI existentes. Los ejemplos usan CPU/flo
 no requieren nuevos componentes de API y no convierten estas comprobaciones en
 garantías universales de convergencia, positividad o conservación.
 
+### Parte 8 implementada: documentación y migración
+
+El README y la guía de uso presentan primero el recorrido geometría, Space, base
+y G, con componentes explícitas y el significado de tamaño total. La guía de
+[migración](migration.md) distingue las tres rutas de construcción compatibles,
+la adaptación escalar, las formas tensoriales anteriores y la persistencia FEM.
+Incluye ejemplos comprobables de equivalencia física, transferencia de estados
+y conservación de coordenadas al cargar una base concreta.
+
+El contrato matemático distingue las identidades exactas de sus verificaciones por
+cuadratura. Explica la medida de frontera cero-dimensional, el levantamiento fijo
+y por qué imponer media cero no basta para demostrar invariancia de la EDP.
+Se aclara la diferencia entre una transformación de base y una matriz de ecuaciones
+de restricción. La documentación conserva los límites y diagnósticos de las entregas
+anteriores; esta etapa no añade semántica al núcleo ni retira interfaces existentes.
+
+Las verificaciones de esta entrega ejecutan los ejemplos nuevos de migración y los
+fragmentos actualizados con datos compatibles, comprueban los enlaces internos y
+la sintaxis Python, y revisan que las capacidades descritas correspondan al código.
+
 ### Trabajo por partes
 
 Cada parte se discute, implementa y verifica antes de avanzar. La documentación de
@@ -1766,7 +1796,7 @@ acuerdos y las verificaciones acompañan cada entrega.
 | 5 | Periodicidad, media cero y sus combinaciones. | Implementada: restricciones nodales y recetas verificadas de fronteras fijas. |
 | 6 | Construcción unificada de G y compatibilidad con la interfaz actual. | Implementada: entrada directa, consistencia y compatibilidad. |
 | 7 | Ejemplos de aceptación del recorrido completo. | Implementada: cuatro programas verificables y su guía matemática. |
-| 8 | Revisión conjunta de documentación y guía de migración. | Pendiente. |
+| 8 | Revisión conjunta de documentación y guía de migración. | Implementada: recorrido actual, compatibilidad y ejemplos verificados. |
 
 Los ejemplos de aceptación son calor en un toro triangulado, una lámina con
 condiciones mixtas y fuente localizada, dos componentes con fronteras diferentes y
