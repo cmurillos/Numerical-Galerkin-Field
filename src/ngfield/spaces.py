@@ -229,7 +229,11 @@ class ProductBasis:
 
 
 class TransformedBasis:
-    """phi_new[j] = sum_i phi_old[i] * transform[i,j]."""
+    """phi_new[j] = sum_i phi_old[i] * transform[i,j].
+
+    Linear combinations preserve an associated homogeneous Space declaration.
+    They do not automatically preserve orthonormality or spectral metadata.
+    """
 
     def __init__(self, basis, transform):
         t = torch.as_tensor(transform).detach().cpu().to(torch.float64).clone()
@@ -244,7 +248,7 @@ class TransformedBasis:
         self.dimension, self.value_shape = int(t.shape[1]), tuple(basis.value_shape)
         if hasattr(basis, "geometry"):
             self.geometry = basis.geometry
-        for name in ("quadrature_order", "validation_order"):
+        for name in ("quadrature_order", "validation_order", "space", "regularity_verified"):
             if hasattr(basis, name):
                 setattr(self, name, getattr(basis, name))
 

@@ -12,6 +12,7 @@ from .geometry import SimplicialDomain, positive_integer
 from .spaces import TransformedBasis
 
 _MAX_ADAPTIVE_ORDER = 64
+_MISSING = object()
 
 
 @dataclass
@@ -137,8 +138,11 @@ def _basis_contract(problem, basis):
         raise ValueError("basis.value_shape must contain positive integers.")
     if not callable(getattr(basis, "evaluate", None)):
         raise ValueError("A basis must implement evaluate(points, order=...).")
-    if hasattr(basis, "geometry") and not problem.geometry.same_mesh(basis.geometry):
-        raise ValueError("The basis belongs to a different mesh.")
+    if hasattr(basis, "geometry"):
+        if not isinstance(basis.geometry, SimplicialDomain):
+            raise TypeError("basis.geometry must be a SimplicialDomain.")
+        if not problem.geometry.same_mesh(basis.geometry):
+            raise ValueError("The basis belongs to a different mesh.")
     return value_shape
 
 
@@ -433,19 +437,68 @@ class GalerkinProblem(_BasisGeometry):
         )
 
 
+def _field_context(problem, basis, weak):
+    """Resolve the public construction routes without altering the operational basis."""
+    from .space import Space
+
+    if basis is _MISSING:
+        raise TypeError("Provide basis=... when constructing a Galerkin field.")
+    space = getattr(basis, "space", None)
+    if space is not None and not isinstance(space, Space):
+        raise TypeError("basis.space must be a Space or None.")
+    if weak is not _MISSING:
+        if problem is not _MISSING:
+            raise TypeError("Provide either weak=... or an existing GalerkinProblem, not both.")
+        if not callable(weak):
+            raise TypeError("weak must be callable.")
+        if space is None:
+            raise ValueError(
+                "Direct construction requires a basis associated with Space. "
+                "Build it with V.basis(...), or provide an explicit GalerkinProblem."
+            )
+        problem = GalerkinProblem(geometry=space.geometry, weak=weak)
+    elif problem is _MISSING:
+        raise TypeError("Provide weak=... or an existing GalerkinProblem.")
+    elif not isinstance(problem, GalerkinProblem):
+        raise TypeError("problem must be a GalerkinProblem for the general field.")
+
+    value_shape = _basis_contract(problem, basis)
+    if space is not None:
+        if value_shape != space.value_shape:
+            raise ValueError("The basis value_shape must match its associated Space components.")
+        if not problem.geometry.same_mesh(space.geometry):
+            raise ValueError("The field geometry and basis.space belong to different meshes.")
+        for name in ("boundaries", "regions"):
+            supplied, declared = getattr(problem.geometry, name), getattr(space.geometry, name)
+            if supplied.keys() != declared.keys() or any(
+                not np.array_equal(np.sort(supplied[label]), np.sort(declared[label]))
+                for label in declared
+            ):
+                raise ValueError(
+                    f"The field {name} must match basis.space.geometry; "
+                    "reuse the geometry associated with the space."
+                )
+    return problem, space, value_shape
+
+
 class GalerkinField:
     """The differentiable coordinate field ``G: [..., N] -> [..., N]``.
 
     Every leading axis is a batch axis. Geometry, basis, coefficients and quadrature
     tables are fixed at construction; differentiation is preserved only with respect
     to the state coordinates.
+
+    Use ``GalerkinField(basis=basis, weak=weak)`` for a basis associated with Space.
+    ``GalerkinField(problem, basis)`` remains available for an explicit GalerkinProblem.
+    Construction validates numerical L2 orthonormality without changing coordinates.
     """
 
     def __init__(
         self,
-        problem,
-        basis,
+        problem=_MISSING,
+        basis=_MISSING,
         *,
+        weak=_MISSING,
         quadrature=None,
         max_quadrature_points=1_000_000,
         max_intermediate_entries=10_000_000,
@@ -454,13 +507,14 @@ class GalerkinField:
     ):
         if dtype not in (torch.float32, torch.float64):
             raise ValueError("Use torch.float32 or torch.float64.")
-        value_shape = _basis_contract(problem, basis)
+        problem, space, value_shape = _field_context(problem, basis, weak)
         max_quadrature_points = positive_integer(max_quadrature_points, "max_quadrature_points")
         self.max_quadrature_points = max_quadrature_points
         self.max_intermediate_entries = positive_integer(
             max_intermediate_entries, "max_intermediate_entries"
         )
         self.problem, self.basis = problem, basis
+        self._space = space
         self.dimension, self.value_shape = basis.dimension, value_shape
         self.form = build_form(problem.weak, value_shape, problem.geometry.ambient_dimension)
         required = derivative_orders(self.form)
@@ -496,6 +550,16 @@ class GalerkinField:
             self.quadrature_tolerance = tolerance
 
         del self._table_requirements, self._table_options
+
+    @property
+    def space(self):
+        """Associated Space, or None for an existing basis without that declaration."""
+        return self._space
+
+    @property
+    def geometry(self):
+        """The simplicial geometry used to prepare this field."""
+        return self.problem.geometry
 
     def _prepare(self, order):
         volume_orders, boundary_orders, coefficients = self._table_requirements

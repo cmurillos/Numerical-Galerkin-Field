@@ -9,7 +9,7 @@ Este ejemplo completo prepara seis modos periódicos con integral cero en [0,1]:
 
 ```python
 import numpy as np
-from ngfield import GalerkinProblem, MeanZero, Periodic, SimplicialDomain, Space, grad, inner
+from ngfield import GalerkinField, MeanZero, Periodic, SimplicialDomain, Space, grad, inner
 
 vertices = np.linspace(0, 1, 17)[:, None]
 simplices = np.column_stack((np.arange(16), np.arange(1, 17)))
@@ -33,7 +33,7 @@ def weak(u, v, dx, ds):
     return -inner(grad(u[0]), grad(v[0])) * dx
 
 
-G = GalerkinProblem(geometry=geometry, weak=weak).field(basis=basis)
+G = GalerkinField(basis=basis, weak=weak)
 ```
 
 El espacio es `V={u in H1(0,1): u(0)=u(1), integral(u)=0}`. `size` sigue contando
@@ -155,7 +155,7 @@ def weak(w, v, dx, ds):
     return -inner(grad(temperature), grad(v[0])) * dx
 
 
-G = GalerkinProblem(geometry=geometry, weak=weak).field(basis=lifted_basis)
+G = GalerkinField(basis=lifted_basis, weak=weak)
 ```
 
 Con datos iniciales y tiempos proporcionados por el usuario, la conexión física es:
