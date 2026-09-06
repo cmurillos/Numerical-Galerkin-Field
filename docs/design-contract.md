@@ -4,8 +4,8 @@ Este documento registra decisiones estables de Numerical Galerkin Field. Una dec
 aceptada sólo cambia mediante una revisión explícita del contrato.
 
 D-001 a D-012 describen el contrato de la versión 0.9.0. D-013 registra el contrato
-de uso aprobado para la próxima evolución de la API. Su parte 2 implementa la
-descripción `Space`; las partes 3 a 8 siguen pendientes. Aceptar un contrato no
+de uso aprobado para la próxima evolución de la API. Sus partes 2 y 3 implementan
+`Space` y la construcción de traza cero; las partes 4 a 8 siguen pendientes. Aceptar un contrato no
 significa que todas sus nuevas llamadas ya estén disponibles.
 
 ## D-001 — Bases fijas
@@ -1210,7 +1210,7 @@ La implementación debe verificar al menos:
 
 ## D-013 — Contrato de uso con espacio admisible explícito
 
-**Estado:** contrato de uso aceptado; partes 1 y 2 completadas en esta rama.
+**Estado:** contrato de uso aceptado; partes 1 a 3 completadas en esta rama.
 
 ### Alcance y objetivo
 
@@ -1275,9 +1275,9 @@ base conforme. `restrictions=[]` indica que no hay restricciones adicionales a l
 regularidad. Robin y Neumann se expresan mediante los términos de la forma débil,
 según la formulación conforme elegida; no son restricciones de traza cero.
 
-La sintaxis detallada, la representación algebraica y las verificaciones de las
-restricciones se desarrollarán en la parte 3. `Space` está exportado desde la parte 2;
-`ZeroTrace` designa la API objetivo y todavía no está implementado.
+`Space` está exportado desde la parte 2. La parte 3 implementa `ZeroTrace` y su
+representación algebraica para las bases nodales admitidas. Otras restricciones,
+como periodicidad y media cero, pertenecen a la parte 5.
 
 ### Parte 2 implementada: descripción de Space
 
@@ -1302,26 +1302,116 @@ espacio. `value_shape` devuelve siempre `(components,)`; las dimensiones geomét
 se consultan en `V.geometry`. No existe todavía una dimensión reducida `V.dimension`:
 el número de modos se decide al elegir la base.
 
-La descripción es inmutable. Una lista vacía de restricciones se convierte en una
-tupla vacía propia, por lo que modificar posteriormente la lista del usuario no altera
-`V`. El objeto geométrico se comparte y no debe mutarse después de construir espacios,
+La descripción es inmutable. La lista de restricciones se convierte en una tupla
+propia de objetos inmutables, por lo que modificar posteriormente la lista del usuario
+no altera `V`. Las declaraciones idénticas se deduplican conservando su orden. El objeto
+geométrico se comparte y no debe mutarse después de construir espacios,
 bases o campos; la inmutabilidad de `Space` no equivale a copiar o congelar
 recursivamente un objeto externo.
 
-En esta entrega, `restrictions` admite únicamente una lista o tupla vacía; su valor
-predeterminado es `()`. Una secuencia no vacía produce `NotImplementedError` y otros
-tipos producen `TypeError`. Nunca se acepta una condición que no vaya a aplicarse. La
-API vigente permite trabajar con una base explícitamente admisible mientras se
-implementa la parte 3.
-
-Esta parte añade el descriptor y sus validaciones. No añade `V.basis`, la construcción
-de restricciones ni la nueva llamada de `GalerkinField`. `Space` no convierte una
-base existente, no certifica regularidad y no modifica el ensamblaje del campo actual.
+`restrictions` admite una lista o tupla de objetos `ZeroTrace`, con valor predeterminado
+`()`. Los tipos no implementados producen `TypeError`. El descriptor declara los
+requisitos; su aplicación a una familia se hace explícitamente con `V.restrict`.
+Crear `Space` por sí solo no modifica ninguna base ni el ensamblaje del campo actual.
 
 Las verificaciones cubren la independencia entre componentes y dimensiones
 geométricas, conservación de medidas y etiquetas, rechazo de restricciones aún no
 implementadas, inmutabilidad de la descripción y uso de sus datos con la ruta vigente
 de campos de una y dos componentes.
+
+### Parte 3 implementada: traza cero y subespacio nodal
+
+```python
+from ngfield import ComponentBasis, FiniteElementBasis, Space, ZeroTrace
+
+V = Space(
+    geometry=geometry,
+    components=2,
+    regularity=1,
+    restrictions=[
+        ZeroTrace(component=0, boundary="fixed"),
+        ZeroTrace(component=1, boundary="other_wall"),
+    ],
+)
+raw = ComponentBasis(FiniteElementBasis(geometry, degree=2), components=V.components)
+admissible = V.restrict(raw)
+```
+
+`ZeroTrace(component=r, boundary=name)` exige `Tr(u_r)=0` sobre las caras exteriores
+etiquetadas. El índice debe pertenecer al estado, la etiqueta debe existir y contener
+caras, y la regularidad declarada debe ser al menos uno. Una etiqueta vacía se rechaza
+para evitar que una selección equivocada descarte silenciosamente la condición. En
+una superficie cerrada se usa una lista vacía de restricciones de frontera.
+
+La implementación admite `FiniteElementBasis` y sus composiciones mediante
+`ComponentBasis`, `ProductBasis` y `TransformedBasis`. Se permiten grados distintos por
+componente, coeficientes nodales acoplados y subconjuntos superpuestos. Los arreglos
+geométricos de la base deben coincidir con los del espacio; las etiquetas se toman
+de `V.geometry`. La forma de valor debe ser `(V.components,)`, incluso para una
+componente. Una familia escalar se envuelve explícitamente con `ComponentBasis`.
+
+Para cada componente se obtiene la matriz que lleva las coordenadas candidatas a
+sus valores nodales. Se seleccionan todos los grados de libertad de las caras
+restringidas, incluidos los nodos interiores de aristas y caras en grado alto.
+Apilando esas filas se obtiene
+
+```text
+C in R^(q x M),
+u(c) = sum_{j=1}^M c_j psi_j,
+C c = 0.
+```
+
+La traza de un elemento Lagrange de grado `d` es un polinomio de grado como máximo
+`d` sobre cada cara. Los nodos Lagrange de esa cara determinan dicho polinomio;
+anular todos sus valores anula la traza completa. Esta es una restricción nodal
+conforme, no una comprobación en puntos arbitrarios ni sólo en los vértices.
+
+La preparación calcula una base del núcleo mediante SVD en CPU y float64. Antes de
+determinar rangos, se normaliza cada columna candidata por su máximo valor absoluto
+en la representación nodal completa. Si `D` contiene esas escalas, se trabaja con
+`C_normalized = C D^(-1)`, se calcula `Q` en su núcleo y se toma `T = D^(-1) Q`,
+con reescalamientos posteriores de columnas que conservan el subespacio. La familia
+devuelta tiene la forma
+
+```text
+phi_j = sum_i psi_i T_ij,
+span{phi_j} = span{psi_i} intersect kernel(Tr_restricted),
+dimension = M - numerical_rank(C_normalized).
+```
+
+Estas identidades se interpretan con la tolerancia algebraica seleccionada. Se
+rechazan modos nodales nulos o numéricamente dependientes antes de formar el núcleo.
+El umbral de rango es `tolerance * max(1, sigma_max)` sobre cada matriz normalizada;
+por defecto `tolerance=1e-12`. El resultado registra `restriction_rank` y
+`restriction_error = max(abs(C_normalized @ Q))`, un residual normalizado de la
+construcción, no una cota universal de error físico sobre la frontera.
+
+El núcleo de dimensión cero produce un error que solicita enriquecer la familia
+candidata. No se agregan modos ni se debilitan restricciones automáticamente.
+`max_matrix_entries=10_000_000` limita las tablas nodales y las matrices densas
+principales; es un presupuesto de preparación, no una cota exacta del uso total de
+memoria. Las tablas densas y la SVD tienen un coste que se paga al construir el
+subespacio. No se promete aún una realización dispersa de esta operación general.
+
+`V.restrict(raw)` no selecciona un tamaño reducido ni ortonormaliza en L2. Devuelve
+una nueva `TransformedBasis` vinculada a `V` mediante `.space`, sin mutar la familia
+original; sin restricciones devuelve la familia admitida sin modificarla. El paso
+operacional disponible sigue siendo `problem.orthonormalize(admissible)` seguido de
+`problem.field(basis=basis)`. La integración con las familias y `V.basis` pertenece a
+la parte 4: restringir pocos modos ya seleccionados no sustituye seleccionar modos
+en un espacio restringido.
+
+Las bases programables y otras familias sin representación nodal verificable se
+rechazan en esta operación. Tampoco se aceptan subclases que puedan reemplazar la
+evaluación nodal certificada. La implementación garantiza conformidad H1 de las
+familias conocidas y rechaza `regularity>1` en `restrict`; la declaración de un orden
+superior en `Space` continúa siendo posible, pero no certifica una base H2.
+
+Las verificaciones incluyen caras completas de grado alto, simplejos embebidos,
+condiciones distintas por componente, grados distintos, modos acoplados, escalas
+distintas, repetición de restricciones y rechazo de familias incompatibles. También
+comprueban que la ortonormalización conserva la traza y que un campo de calor con
+extremos fijos mantiene la acción y la diferenciación reducidas esperadas.
 
 ### Base admisible y dimensión reducida
 
@@ -1404,8 +1494,8 @@ def weak(u, v, dx, ds):
 G = GalerkinField(basis=basis, weak=weak, quadrature=8)
 ```
 
-`SimplicialDomain`, las medidas, las operaciones de la forma y el descriptor `Space`
-ya existen. `ZeroTrace`, `V.basis` y la construcción final mostrada requieren implementación.
+`SimplicialDomain`, las medidas, las operaciones de la forma, `Space` y `ZeroTrace`
+ya existen. `V.basis` y la construcción final mostrada requieren implementación.
 La llamada vigente sigue siendo `problem.field(basis=basis)`.
 
 ### Garantías y límites de verificación
@@ -1429,7 +1519,7 @@ acuerdos y las verificaciones acompañan cada entrega.
 |---|---|---|
 | 1 | Contrato de uso, responsabilidades, dimensiones y API objetivo. | Aceptado y documentado en D-013. |
 | 2 | Objeto `Space`, componentes, regularidad y vínculo geométrico. | Implementada: descripción y validaciones. |
-| 3 | Lenguaje de restricciones y construcción inicial de traza cero. | Pendiente. |
+| 3 | Lenguaje de restricciones y construcción inicial de traza cero. | Implementada: `ZeroTrace` y `V.restrict` para bases nodales. |
 | 4 | Familias sobre el espacio restringido y ortonormalización. | Pendiente. |
 | 5 | Periodicidad, media cero y sus combinaciones. | Pendiente. |
 | 6 | Construcción unificada de G y compatibilidad con la interfaz actual. | Pendiente. |

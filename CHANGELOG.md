@@ -9,9 +9,12 @@ The project follows [Semantic Versioning](https://semver.org/).
 ### Added
 
 - `Space`: a frozen description of geometry, state components and requested Sobolev
-  regularity under the approved D-013 contract. Nonempty restrictions are explicitly
-  rejected until their construction is implemented; basis and field construction
-  continue through the existing API.
+  regularity under the approved D-013 contract.
+- `ZeroTrace` and `Space.restrict`: component-wise homogeneous trace constraints on
+  built-in nodal finite-element bases and their linear, component and product
+  combinations. Constraints cover whole faces at arbitrary polynomial degree;
+  unsupported representations and zero or dependent candidate spaces are rejected.
+  The result is prepared for the existing L2 orthonormalization and field API.
 
 ## [0.9.0] - 2026-09-05
 
