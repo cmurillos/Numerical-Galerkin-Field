@@ -8,6 +8,13 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Four executable D-013 acceptance examples using the complete Space-to-field API:
+  surface heat on a torus, a mixed-boundary plate with localized forcing, nonlinear
+  coupled components with distinct traces, and periodic mean-zero diffusion.
+  Their physical balances, known equilibria, discrete temporal references and
+  periodic PDE refinement checks run in the standard test suite. A guide states
+  the mathematical problems, tolerances and scope of each reference.
+
 - `Space`: a frozen description of geometry, state components and requested Sobolev
   regularity under the approved D-013 contract.
 - `ZeroTrace` and `Space.restrict`: component-wise homogeneous trace constraints on

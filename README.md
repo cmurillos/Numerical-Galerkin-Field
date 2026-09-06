@@ -152,9 +152,12 @@ graph.
 
 ## Documentation and examples
 
+- [Complete Space-to-field acceptance examples](docs/acceptance-examples.md): torus,
+  mixed plate, coupled components and periodic mean-zero diffusion, with executable
+  numerical checks and explicit distinctions between PDE and discrete references.
 - [Usage guide](docs/usage.md)
 - [Mathematical contract](docs/mathematics.md)
-- [Accepted design decisions D-001--D-012](docs/design-contract.md)
+- [Accepted design decisions](docs/design-contract.md)
 - [General ND problem](examples/general_problem.py)
 - [Embedded torus](examples/embedded_torus.py)
 - [Discontinuous-data projection](examples/discontinuous_projection.py)
