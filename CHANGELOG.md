@@ -24,6 +24,15 @@ The project follows [Semantic Versioning](https://semver.org/).
   combinations are rejected. Custom source regularity distinguishes known
   conformity from user declarations. Existing field and basis APIs remain available.
 
+- `Periodic` and `MeanZero`: component-wise matching of complete nodal boundary
+  traces and zero integrals over the domain or named regions. They combine with
+  `ZeroTrace` before basis selection, including corner equivalences and redundant
+  mean equations. Connectivity and integral preparation budgets are checked;
+  integral kernels currently use dense algebra.
+- Verified autonomous boundary recipes: fixed spatial Neumann/Robin data and
+  nonhomogeneous Dirichlet through an explicit stationary lift, including physical
+  initial-state projection and reconstruction.
+
 ## [0.9.0] - 2026-09-05
 
 First public beta release.
