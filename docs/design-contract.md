@@ -3,6 +3,10 @@
 Este documento registra decisiones estables de Numerical Galerkin Field. Una decisión
 aceptada sólo cambia mediante una revisión explícita del contrato.
 
+D-001 a D-012 describen el contrato de la versión 0.9.0. D-013 registra el contrato
+de uso aprobado para la próxima evolución de la API; su implementación está pendiente.
+Aceptar un contrato no significa que sus nuevas llamadas ya estén disponibles.
+
 ## D-001 — Bases fijas
 
 **Estado:** aceptada.
@@ -21,6 +25,9 @@ coeficientes `z`, no respecto de los parámetros usados para definir la base.
 ## D-002 — Interfaz canónica
 
 **Estado:** aceptada.
+
+Esta es la interfaz disponible en 0.9.0. D-013 define el recorrido futuro basado en un
+espacio admisible explícito; la transición de interfaz se resolverá en su parte 6.
 
 La construcción principal es
 
@@ -1199,3 +1206,193 @@ La implementación debe verificar al menos:
 6. ausencia de mutaciones sobre `G`, su base o sus tablas;
 7. documentación explícita de que los tres resultados son indicadores, no cotas;
 8. compatibilidad con CPU, CUDA, `float32` y `float64` bajo los contratos previos.
+
+## D-013 — Contrato de uso con espacio admisible explícito
+
+**Estado:** contrato de uso aceptado; implementación pendiente.
+
+### Alcance y objetivo
+
+El usuario sigue un único recorrido, tanto para problemas sencillos como para los
+problemas más generales admitidos:
+
+```text
+geometría -> espacio admisible -> base -> campo G.
+```
+
+La forma débil se incorpora al construir el campo. El alcance inicial comprende
+geometría fija, evolución autónoma, producto interno L2 sumado sobre las componentes
+y restricciones lineales homogéneas. Los datos del operador son independientes del
+tiempo; el estado sí puede evolucionar mediante `dot(z) = G(z)`.
+
+Se reutilizan la geometría simplicial afín, sus medidas, el lenguaje de formas y el
+ensamblaje existentes. No se exige una nueva entrada `mass`. Los estados admisibles
+afines, las geometrías móviles y los campos con dependencia temporal explícita quedan
+fuera de esta etapa. Este contrato no afirma soporte para toda restricción lineal o
+regularidad Sobolev mediante una única implementación automática.
+
+### Geometría y subconjuntos
+
+`SimplicialDomain` conserva el contrato de D-003:
+
+| Entrada | Forma o contenido | Significado |
+|---|---|---|
+| `vertices` | `[n_v, p]` | Vértices en el espacio ambiente `R^p`. |
+| `simplices` | `[n_e, k+1]` | Elementos de dimensión intrínseca `k <= p`. |
+| `regions` | Etiquetas de elementos | Subconjuntos donde actúa `dx("name")`. |
+| `boundaries` | Etiquetas de caras exteriores | Subconjuntos donde actúa `ds("name")`. |
+
+Las dimensiones se deducen de los arreglos. Las etiquetas sólo seleccionan conjuntos:
+nombrar una frontera `"fixed"` no impone un valor ni modifica el espacio. Una
+superficie triangulada usa su medida inducida y gradientes tangenciales elementales;
+el error geométrico respecto de una superficie suave se distingue de la cuadratura.
+
+### Espacio y componentes
+
+El nuevo objeto `Space` describe el espacio antes de fijar una familia o un número de
+modos. Conserva la geometría, las componentes, la regularidad exigida y las
+restricciones. Por ejemplo, una componente, regularidad uno y traza cero en `Gamma_D`
+representan
+
+```text
+H = L2(Omega_h; R),
+V = {u in H1(Omega_h) : Tr(u) = 0 on Gamma_D}.
+```
+
+Para `c` componentes, el producto interno inicial es
+
+```text
+(u, v)_H = integral_Omega_h sum_{r=0}^{c-1} u_r v_r dmu_h.
+```
+
+En el nuevo recorrido, las componentes son explícitas incluso para un estado escalar:
+`components=1` y `u[0]`, con forma de valor `(1,)`. Esto no cambia la forma de valor
+escalar `()` que admite la API 0.9.0. Su compatibilidad se resolverá en la parte 6.
+
+`regularity=1` exige H1; no es una instrucción que convierta cualquier familia en una
+base conforme. `restrictions=[]` indica que no hay restricciones adicionales a la
+regularidad. Robin y Neumann se expresan mediante los términos de la forma débil,
+según la formulación conforme elegida; no son restricciones de traza cero.
+
+La sintaxis detallada, la representación algebraica y las verificaciones de las
+restricciones se desarrollarán en la parte 3. Los nombres `Space` y `ZeroTrace` de los
+ejemplos siguientes designan la API objetivo, no símbolos actualmente exportados.
+
+### Base admisible y dimensión reducida
+
+La construcción de una base pertenece al espacio:
+
+```text
+V_N subset V,
+dim(V_N) = N,
+Phi: R^N -> V_N,
+Phi(z) = sum_{j=1}^N z_j phi_j.
+```
+
+`size=N` siempre significa dimensión reducida total, también para varias componentes.
+Si se solicita un reparto específico entre componentes, deberá expresarse en la
+configuración de la base; su sintaxis se concretará en la parte 4. `degree` controla
+la construcción espacial y no equivale al número de modos. En familias de dimensión
+fijada por la malla o por una fuente personalizada, la parte 4 precisará cómo se
+declara y comprueba el tamaño sin truncar silenciosamente una familia.
+
+Las restricciones se aplican antes de seleccionar los modos. En la familia laplaciana,
+el problema espectral debe resolverse sobre el espacio restringido; recortar una base
+reducida no restringida no sustituye esa operación.
+
+La base operacional queda fija y numéricamente ortonormal respecto del producto L2
+discretizado. Conserva su geometría, componentes, restricciones y datos de
+normalización. Se mantienen los controles de D-005 y D-007: la cuadratura usada al
+construir el campo debe validar la ortonormalidad dentro de la tolerancia, sin cambiar
+silenciosamente las coordenadas de una base existente.
+
+### Forma débil y campo
+
+`weak(u, v, dx, ds)` conserva el lenguaje de D-004. Cada integrando es escalar y la
+forma es lineal en `v`; puede ser no lineal en `u`. Se mantienen `dx`, `dx("region")`,
+`ds` y `ds("boundary")`, con la interpretación geométrica correspondiente.
+
+El objetivo matemático sigue siendo
+
+```text
+G: R^N -> R^N,
+G_i(z) = a(Phi(z); phi_i).
+```
+
+Su realización computable usa las medidas, bases y cuadraturas discretas existentes.
+La entrada tiene forma `[..., N]` y la salida conserva esa forma. Geometría, base,
+coeficientes y cuadratura quedan fijos al construir `G`; se conserva la diferenciación
+respecto de `z` bajo D-006. No se requieren datos iniciales ni tiempos para construirlo.
+
+### Ejemplo de uso objetivo — todavía no ejecutable
+
+El usuario prepara fuera de este ejemplo los vértices, conectividades, subconjuntos,
+el tamaño `N` y los coeficientes físicos fijos. La forma describe difusión con fuente
+en `"heated"`, traza cero en `"fixed"` e intercambio térmico en `"exchange"`.
+
+```python
+geometry = SimplicialDomain(
+    vertices=vertices,
+    simplices=simplices,
+    regions={"heated": heated_cells},
+    boundaries={"fixed": fixed_faces, "exchange": exchange_faces},
+)
+
+V = Space(
+    geometry=geometry,
+    components=1,
+    regularity=1,
+    restrictions=[ZeroTrace(component=0, boundary="fixed")],
+)
+
+basis = V.basis("laplacian", size=N, degree=1)
+
+
+def weak(u, v, dx, ds):
+    return (
+        -kappa * inner(grad(u[0]), grad(v[0])) * dx
+        + f * v[0] * dx("heated")
+        - alpha * (u[0] - g) * v[0] * ds("exchange")
+    )
+
+
+G = GalerkinField(basis=basis, weak=weak, quadrature=8)
+```
+
+`SimplicialDomain`, las medidas y las operaciones de la forma ya existen. `Space`,
+`ZeroTrace`, `V.basis` y la construcción final mostrada requieren implementación.
+La llamada vigente sigue siendo `problem.field(basis=basis)`.
+
+### Garantías y límites de verificación
+
+- Las incompatibilidades detectables entre espacio, base, restricciones y forma deben
+  producir errores explicativos, sin modificar silenciosamente el problema.
+- La implementación debe distinguir propiedades verificadas de propiedades declaradas
+  por el usuario, especialmente para bases personalizadas. Muestrear una restricción
+  en unos puntos no certifica que se cumpla sobre toda una frontera.
+- La regularidad declarada no sustituye la conformidad de la familia; derivadas
+  elementales disponibles no implican regularidad Sobolev global de orden superior.
+- La construcción de G no certifica por sí sola existencia global, convergencia a la
+  EDP, positividad, conservación ni invariancia de una bola.
+
+### Trabajo por partes
+
+Cada parte se discute, implementa y verifica antes de avanzar. La documentación de
+acuerdos y las verificaciones acompañan cada entrega.
+
+| Parte | Entrega | Estado al aceptar D-013 |
+|---|---|---|
+| 1 | Contrato de uso, responsabilidades, dimensiones y API objetivo. | Aceptado y documentado en D-013. |
+| 2 | Objeto `Space`, componentes, regularidad y vínculo geométrico. | Pendiente. |
+| 3 | Lenguaje de restricciones y construcción inicial de traza cero. | Pendiente. |
+| 4 | Familias sobre el espacio restringido y ortonormalización. | Pendiente. |
+| 5 | Periodicidad, media cero y sus combinaciones. | Pendiente. |
+| 6 | Construcción unificada de G y compatibilidad con la interfaz actual. | Pendiente. |
+| 7 | Ejemplos de aceptación del recorrido completo. | Pendiente. |
+| 8 | Revisión conjunta de documentación y guía de migración. | Pendiente. |
+
+Los ejemplos de aceptación serán calor en un toro triangulado, una lámina con
+condiciones mixtas y fuente localizada, dos componentes con fronteras diferentes y
+difusión periódica con media cero. Todos emplearán geometría y datos del operador
+independientes del tiempo. La parte 7 reúne las comprobaciones del recorrido; no
+pospone las verificaciones de cada implementación.

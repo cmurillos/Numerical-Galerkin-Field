@@ -1,5 +1,10 @@
 # Interfaz general de Numerical Galerkin Field
 
+Esta guía describe la API disponible en 0.9.0. El
+[contrato D-013](design-contract.md#d-013--contrato-de-uso-con-espacio-admisible-explícito)
+registra el recorrido futuro con un espacio admisible explícito. `Space`, `ZeroTrace`
+y las nuevas llamadas allí ilustradas todavía no están implementados.
+
 ## Problema mínimo
 
 La interfaz central sólo recibe la geometría simplicial y una forma débil completa:
