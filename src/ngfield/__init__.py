@@ -29,7 +29,7 @@ from .galerkin import GalerkinProblem
 from .geometry import SimplicialDomain
 from .io import load_basis, save_basis
 from .problem import Problem
-from .restrictions import ZeroTrace
+from .restrictions import MeanZero, Periodic, ZeroTrace
 from .space import Space
 from .spaces import (
     Basis,
@@ -54,6 +54,8 @@ __all__ = [
     "GalerkinField",
     "GeneralGalerkinField",
     "GalerkinProblem",
+    "MeanZero",
+    "Periodic",
     "PolynomialBasis",
     "ProductBasis",
     "Problem",

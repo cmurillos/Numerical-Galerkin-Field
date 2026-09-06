@@ -15,7 +15,7 @@ from .basis_factory import (
 )
 from .galerkin import _basis_contract, _BasisGeometry, _tolerance
 from .geometry import positive_integer, readonly
-from .restrictions import _boundary_dofs
+from .restrictions import nodal_prolongations
 from .spaces import (
     ComponentBasis,
     FiniteElementBasis,
@@ -66,23 +66,6 @@ def _check_size(size, actual):
         )
 
 
-def _free_dofs(space, raw):
-    free = []
-    for component in range(space.components):
-        faces = [
-            space.geometry.boundaries[r.boundary]
-            for r in space.restrictions
-            if r.component == component
-        ]
-        fixed = (
-            _boundary_dofs(raw, space.geometry, np.unique(np.concatenate(faces)))
-            if faces
-            else np.empty(0, dtype=np.int64)
-        )
-        free.append(np.setdiff1d(np.arange(raw.ndofs), fixed))
-    return free
-
-
 def _nodal(
     space,
     family,
@@ -93,6 +76,7 @@ def _nodal(
     quadrature_order=None,
     validation_order=None,
     tolerance=1e-10,
+    restriction_tolerance=1e-12,
     max_dofs=100_000,
     max_quadrature_points=1_000_000,
     max_matrix_entries=20_000_000,
@@ -101,8 +85,14 @@ def _nodal(
     tolerance = _tolerance(tolerance)
     maximum = positive_integer(max_matrix_entries, "max_matrix_entries")
     raw = FiniteElementBasis(space.geometry, degree, max_dofs=max_dofs)
-    free = _free_dofs(space, raw)
-    dimensions = tuple(map(len, free))
+    prolongations, restriction_error = nodal_prolongations(
+        space,
+        raw,
+        tolerance=_tolerance(restriction_tolerance),
+        maximum=maximum,
+        max_quadrature_points=max_quadrature_points,
+    )
+    dimensions = tuple(P.shape[1] for P in prolongations)
     total = sum(dimensions)
     if not total:
         raise ValueError("The admissible nodal space is zero; enrich the mesh or degree.")
@@ -139,8 +129,8 @@ def _nodal(
     if validation < 2 * degree:
         raise ValueError("Nodal basis validation_order must be at least 2*degree.")
     mass, stiffness = _finite_element_matrices(raw, order, max_quadrature_points, maximum)
-    masses = [mass[dofs][:, dofs] for dofs in free]
-    stiffnesses = [stiffness[dofs][:, dofs] for dofs in free]
+    masses = [(P.T @ mass @ P).tocsr() for P in prolongations]
+    stiffnesses = [(P.T @ stiffness @ P).tocsr() for P in prolongations]
     coefficients = np.zeros((raw.ndofs, size, space.components))
     eigenvalues = None
     if family == "laplacian" and counts is None:
@@ -149,12 +139,13 @@ def _nodal(
             block_diag(stiffnesses, format="csr"), block_diag(masses, format="csr"), size, tolerance
         )
         offset = 0
-        for component, dofs in enumerate(free):
-            coefficients[dofs, :, component] = vectors[offset : offset + len(dofs)]
-            offset += len(dofs)
+        for component, P in enumerate(prolongations):
+            count = P.shape[1]
+            coefficients[:, :, component] = P @ vectors[offset : offset + count]
+            offset += count
     else:
         offset, values = 0, []
-        for component, (dofs, count) in enumerate(zip(free, counts)):
+        for component, (P, count) in enumerate(zip(prolongations, counts)):
             if not count:
                 continue
             if family == "laplacian":
@@ -165,7 +156,7 @@ def _nodal(
             else:
                 factor = cholesky(masses[component].toarray(), lower=True)
                 vectors = solve_triangular(factor.T, np.eye(count), lower=False)
-            coefficients[dofs, offset : offset + count, component] = vectors
+            coefficients[:, offset : offset + count, component] = P @ vectors
             offset += count
         if family == "laplacian":
             eigenvalues = readonly(values)
@@ -178,7 +169,7 @@ def _nodal(
     result.component_sizes = counts  # None: global spectrum, possibly coupled degenerate modes.
     result.admissible_dofs = dimensions
     result.restriction_rank = raw.ndofs * space.components - total
-    result.restriction_error = 0.0  # eliminated nodal coefficients are exactly zero
+    result.restriction_error = restriction_error  # normalized residual before spectral selection
     result.regularity_verified = True
     result.orthonormality_error = _BasisGeometry(space.geometry).validate_basis(
         result,
@@ -192,7 +183,7 @@ def _nodal(
 def _functional(space, family, size, counts, *, max_matrix_entries=20_000_000, **options):
     if space.restrictions:
         raise NotImplementedError(
-            f"{family} does not yet implement complete ZeroTrace constraints. "
+            f"{family} does not yet implement complete ZeroTrace, Periodic or MeanZero constraints. "
             "Use laplacian, finite-element, or a custom nodal source."
         )
     maximum = positive_integer(max_matrix_entries, "max_matrix_entries")
@@ -251,7 +242,12 @@ def _custom(
     maximum = positive_integer(max_matrix_entries, "max_matrix_entries")
     _budget(source.dimension, source.dimension, maximum)
     admissible = (
-        space.restrict(source, tolerance=restriction_tolerance, max_matrix_entries=maximum)
+        space.restrict(
+            source,
+            tolerance=restriction_tolerance,
+            max_matrix_entries=maximum,
+            max_quadrature_points=max_quadrature_points,
+        )
         if space.restrictions
         else source
     )

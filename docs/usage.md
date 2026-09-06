@@ -1,6 +1,6 @@
 # Interfaz general de Numerical Galerkin Field
 
-Esta guía conserva el recorrido de 0.9.0 y documenta `Space`, `ZeroTrace` y
+Esta guía conserva el recorrido de 0.9.0 y documenta `Space`, `ZeroTrace`, `Periodic`, `MeanZero` y
 `V.basis(...)` añadidos en esta rama. El
 [contrato D-013](design-contract.md#d-013--contrato-de-uso-con-espacio-admisible-explícito)
 registra el recorrido completo. La construcción de la base desde el espacio ya
@@ -80,7 +80,8 @@ fronteras. Sus atributos no se reasignan y la lista de restricciones se copia
 como tupla. La geometría compartida debe mantenerse fija, igual que al construir una
 base o un campo.
 
-`restrictions` admite una lista o tupla de objetos `ZeroTrace`; omitir el argumento
+`restrictions` admite una lista o tupla de objetos `ZeroTrace`, `Periodic` y
+`MeanZero`; omitir el argumento
 equivale a la tupla vacía. Los tipos no implementados se rechazan explícitamente.
 Una etiqueta de frontera nunca impone por sí sola una restricción.
 
@@ -192,11 +193,11 @@ No se puede exceder la dimensión admisible de ninguna componente.
 
 | Familia en `V.basis` | Tamaño | Restricciones admitidas en esta etapa |
 |---|---|---|
-| `"laplacian"` | `size` total o `component_sizes`; selección espectral restringida. | `ZeroTrace`, por componente y cara completa. |
-| `"finite-element"` | Todos los grados de libertad libres; `size` opcional comprueba la dimensión. | `ZeroTrace`, por componente y cara completa. |
+| `"laplacian"` | `size` total o `component_sizes`; selección espectral restringida. | `ZeroTrace`, `Periodic`, `MeanZero` y sus combinaciones nodales. |
+| `"finite-element"` | Todos los grados de libertad libres; `size` opcional comprueba la dimensión. | `ZeroTrace`, `Periodic`, `MeanZero` y sus combinaciones nodales. |
 | `"polynomial"` | `size` total o `degree` para todos los monomios por componente. | Sin restricciones adicionales. |
 | `"fourier"` | `size` total o `component_sizes`. | Sin restricciones adicionales; no certifica identificaciones periódicas de la geometría. |
-| `"custom"` | Todo el espacio de la fuente después de restringirlo; `size` opcional comprueba la dimensión. | `ZeroTrace` sólo para las representaciones nodales de la parte 3. |
+| `"custom"` | Todo el espacio de la fuente después de restringirlo; `size` opcional comprueba la dimensión. | Las mismas combinaciones en representaciones nodales de la parte 3. |
 
 Para polinomios y Fourier, el reparto predeterminado es equilibrado: con
 `size = q*c + r` se asignan `q+1` modos a las primeras `r` componentes y `q` a las
@@ -219,7 +220,7 @@ source = ComponentBasis(FiniteElementBasis(geometry, degree=2), components=1)
 custom_basis = V.basis("custom", source=source, quadrature_order=6)
 ```
 
-La fuente debe tener forma de valor `(V.components,)`. Cuando hay `ZeroTrace`, primero
+La fuente debe tener forma de valor `(V.components,)`. Cuando hay restricciones, primero
 se calcula su núcleo nodal y después se ortonormaliza. Un callback arbitrario sin
 restricciones también puede entrar como fuente, pero su pertenencia al espacio
 Sobolev queda bajo responsabilidad del usuario: `basis.regularity_verified` será
@@ -232,9 +233,11 @@ La preparación conserva `quadrature_order`, `validation_order` y
 `orthonormality_error`. En las familias nodales el orden predeterminado es
 `2*degree`, la validación usa dos órdenes más, y ambos órdenes deben ser al menos
 `2*degree`. Los modos laplacianos incluyen `eigenvalues`; las dos familias nodales
-incluyen `admissible_dofs` por componente y el rango de las restricciones. En ellas
-`restriction_error=0` registra la eliminación exacta de coeficientes nodales; en una
-fuente personalizada restringida sigue siendo el residual normalizado de la SVD.
+incluyen `admissible_dofs` por componente y el rango de las restricciones.
+`restriction_error` registra un residual normalizado previo a la normalización: cero
+para las identificaciones y fijaciones nodales, o el residual del núcleo integral
+cuando hay medias. En `custom` sigue el significado de la SVD de la parte 3.
+No es una cota de error físico.
 
 Se conservan los controles de cuadratura y tolerancia de las familias anteriores.
 `max_matrix_entries` limita las matrices principales de preparación (20 millones
@@ -264,6 +267,19 @@ G = GalerkinProblem(geometry=geometry, weak=weak).field(basis=basis)
 Las condiciones naturales del problema espectral sólo definen la familia de
 aproximación. Los coeficientes y términos Robin/Neumann de la evolución siguen en
 `weak`, usando `dx`, `dx("region")` y `ds("boundary")`.
+
+## Periodicidad, media cero y fronteras fijas — D-013, parte 5
+
+La [guía de periodicidad y fronteras fijas](periodic-and-fixed-boundaries.md) contiene
+la API, ejemplos ejecutables, el contrato algebraico y los límites de esta etapa.
+`Periodic` empareja vértices de fronteras con conectividad compatible y extiende la
+igualdad a las trazas completas de grado alto. `MeanZero` integra una componente
+sobre el dominio o una región etiquetada. Ambas se combinan con `ZeroTrace` antes
+de seleccionar modos en `laplacian`, `finite-element` y fuentes nodales `custom`.
+
+La guía también desarrolla Robin y Neumann con datos espaciales fijos y Dirichlet
+no homogénea mediante un levantamiento explícito `T=ell+w`. Explica la proyección
+de `T0-ell`, la reconstrucción de T y cuándo media cero es compatible con la EDP.
 
 ## Geometría simplicial
 

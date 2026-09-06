@@ -1210,7 +1210,7 @@ La implementación debe verificar al menos:
 
 ## D-013 — Contrato de uso con espacio admisible explícito
 
-**Estado:** contrato de uso aceptado; partes 1 a 4 completadas en esta rama.
+**Estado:** contrato de uso aceptado; partes 1 a 5 completadas en esta rama.
 
 ### Alcance y objetivo
 
@@ -1227,10 +1227,11 @@ y restricciones lineales homogéneas. Los datos del operador son independientes 
 tiempo; el estado sí puede evolucionar mediante `dot(z) = G(z)`.
 
 Se reutilizan la geometría simplicial afín, sus medidas, el lenguaje de formas y el
-ensamblaje existentes. No se exige una nueva entrada `mass`. Los estados admisibles
-afines, las geometrías móviles y los campos con dependencia temporal explícita quedan
-fuera de esta etapa. Este contrato no afirma soporte para toda restricción lineal o
-regularidad Sobolev mediante una única implementación automática.
+ensamblaje existentes. No se exige una nueva entrada `mass`. Las geometrías móviles
+y los campos con dependencia temporal explícita quedan fuera de esta etapa. Desde
+la parte 5 se verifica Dirichlet fija no homogénea mediante un levantamiento
+explícito; el espacio afín no tiene aún un objeto propio. No se afirma soporte
+para toda restricción lineal o regularidad Sobolev con una implementación automática.
 
 ### Geometría y subconjuntos
 
@@ -1276,8 +1277,8 @@ regularidad. Robin y Neumann se expresan mediante los términos de la forma déb
 según la formulación conforme elegida; no son restricciones de traza cero.
 
 `Space` está exportado desde la parte 2. La parte 3 implementa `ZeroTrace` y su
-representación algebraica para las bases nodales admitidas. Otras restricciones,
-como periodicidad y media cero, pertenecen a la parte 5.
+representación algebraica para las bases nodales admitidas. La parte 5 añade
+`Periodic`, `MeanZero` y sus combinaciones en esas representaciones.
 
 ### Parte 2 implementada: descripción de Space
 
@@ -1309,8 +1310,8 @@ geométrico se comparte y no debe mutarse después de construir espacios,
 bases o campos; la inmutabilidad de `Space` no equivale a copiar o congelar
 recursivamente un objeto externo.
 
-`restrictions` admite una lista o tupla de objetos `ZeroTrace`, con valor predeterminado
-`()`. Los tipos no implementados producen `TypeError`. El descriptor declara los
+`restrictions` admite una lista o tupla de objetos `ZeroTrace`, `Periodic` y
+`MeanZero`, con valor predeterminado `()`. Los tipos no implementados producen `TypeError`. El descriptor declara los
 requisitos; su aplicación a una familia se hace con `V.restrict` o al construirla con `V.basis`.
 Crear `Space` por sí solo no modifica ninguna base ni el ensamblaje del campo actual.
 
@@ -1506,8 +1507,9 @@ normalización usa `2*degree` por defecto y la de validación dos órdenes más;
 puede ser inferior a `2*degree`. Las otras familias conservan sus controles de D-007.
 Se exponen `quadrature_order`, `validation_order`, `orthonormality_error` y, en
 laplacian, `eigenvalues`. Las familias nodales registran `admissible_dofs` por
-componente, `restriction_rank` y `restriction_error=0` por eliminación exacta de los
-coeficientes restringidos. En `custom` el residual de restricción sigue el significado
+componente y `restriction_rank`. `restriction_error=0` registra las identificaciones
+y fijaciones nodales exactas; con medias registra el residual del núcleo integral
+antes de seleccionar modos. En `custom` el residual de restricción sigue el significado
 normalizado de la SVD de la parte 3.
 
 `max_matrix_entries` protege las matrices principales de preparación, incluidos
@@ -1522,6 +1524,79 @@ dispersa, reparto global y explícito, caras de grado alto en geometría embebid
 espacios nulos por componente, bases acopladas, fuentes declaradas, calor sobre el
 toro triangulado y términos Robin con una fuente sobre una región etiquetada.
 También se comprueban la acción y la derivada del campo usando la interfaz vigente.
+
+### Parte 5 implementada: periodicidad, medias y fronteras autónomas
+
+La [guía de periodicidad y fronteras fijas](periodic-and-fixed-boundaries.md) forma
+parte de este contrato y contiene los ejemplos y límites detallados.
+
+```python
+V = Space(
+    geometry=geometry,
+    components=1,
+    restrictions=[
+        Periodic(component=0, boundaries=("left", "right"), vertex_pairs=vertex_pairs),
+        MeanZero(component=0),
+    ],
+)
+basis = V.basis("laplacian", size=N, degree=2)
+```
+
+`Periodic` requiere una biyección completa de vértices entre dos fronteras
+etiquetadas que preserve sus caras. La identificación afín se extiende mediante
+pesos baricéntricos enteros a todos los nodos de grado alto. Se cierran equivalencias
+en esquinas y se propaga traza cero a toda clase afectada. No se implementan
+rotaciones entre componentes, desfases ni mallas de frontera incompatibles.
+
+`MeanZero(component=r, region=None)` impone `integral_region u_r dmu_h=0`.
+`None` y `"all"` son equivalentes; una etiqueta selecciona los mismos elementos y
+medida inducida de dx. Admite L2 y no significa promediar valores nodales. Varias
+medias pueden combinarse con restricciones de traza; las ecuaciones redundantes no
+eliminan dimensión dos veces. La media global en un dominio desconectado no impone
+por separado la media en cada componente conexa.
+
+En cada componente, una prolongación dispersa S realiza fijaciones e identificaciones.
+Los funcionales de media b se integran con orden al menos igual al grado nodal y se
+normalizan por `sum(abs(b))`. El núcleo Q de las filas `b^T S` determina P=S Q; sin
+medias, P=S. El problema se prepara con `P^T M P` y `P^T K P` antes de seleccionar
+modos y normalizar en L2. Las fuentes nodales acopladas apilan restricciones de
+traza, diferencias periódicas e integrales usando el escalado de la parte 3.
+
+El núcleo de las medias usa álgebra densa y puede densificar las matrices;
+`max_matrix_entries` limita su preparación. `restriction_tolerance=1e-12` controla
+el rango en `V.basis`, y `tolerance` en `V.restrict`. `max_quadrature_points` limita
+la integración. Las combinaciones están disponibles en las familias nodales y
+fuentes `custom` certificables; polinomios, Fourier y callbacks no incorporan aún
+estos constructores de restricciones. Un espacio total nulo se rechaza.
+
+La geometría y las etiquetas se conservan. La periodicidad se formula con pruebas
+periódicas, sin exigir igualdad puntual de derivadas normales FEM ni añadir
+intercambio exterior sobre sus caras. Un toro ya cerrado no necesita pares.
+Media cero sólo representa una restricción invariante de la EDP si ésta la
+preserva: fuentes no equilibradas, flujo neto o Robin pueden modificarla. Imponerla
+entonces construye un modelo restringido, no prueba conservación de la EDP.
+
+La ampliación solicitada sobre fronteras fijas conserva G autónomo. Robin y
+Neumann con datos espaciales fijos entran en la forma con la convención de flujo
+saliente `q_out=-kappa*grad(T) dot n`. Dirichlet fija no homogénea se traduce mediante
+un levantamiento explícito ell de traza prescrita:
+
+```text
+T = ell + Phi(z),
+G_i(z) = a(ell + Phi(z); phi_i).
+```
+
+No aparece derivada temporal de ell. `Space` representa variaciones homogéneas;
+la proyección actúa sobre `T0-ell` y la reconstrucción física suma ell. La forma
+usa T también en términos no lineales y Robin. El paquete no genera ell ni ofrece
+un objeto de espacio afín. Los levantamientos expresados con `dx.x` admiten `grad`;
+un coeficiente externo requiere sus gradientes explícitos bajo el contrato actual.
+
+Las pruebas incluyen espectros periódicos conocidos, media cero en toro y dominios
+desconectados, caras embebidas de grado alto, ciclos en esquinas, restricciones por
+componente, medias regionales redundantes, escalado, errores de conectividad,
+proyección y reconstrucción con Dirichlet fija y una lámina con equilibrio conocido
+bajo Dirichlet, Neumann y Robin espaciales fijos.
 
 ### Forma débil y campo
 
@@ -1603,7 +1678,7 @@ acuerdos y las verificaciones acompañan cada entrega.
 | 2 | Objeto `Space`, componentes, regularidad y vínculo geométrico. | Implementada: descripción y validaciones. |
 | 3 | Lenguaje de restricciones y construcción inicial de traza cero. | Implementada: `ZeroTrace` y `V.restrict` para bases nodales. |
 | 4 | Familias sobre el espacio restringido y ortonormalización. | Implementada: `V.basis`, tamaño total, espectro restringido y L2. |
-| 5 | Periodicidad, media cero y sus combinaciones. | Pendiente. |
+| 5 | Periodicidad, media cero y sus combinaciones. | Implementada: restricciones nodales y recetas verificadas de fronteras fijas. |
 | 6 | Construcción unificada de G y compatibilidad con la interfaz actual. | Pendiente. |
 | 7 | Ejemplos de aceptación del recorrido completo. | Pendiente. |
 | 8 | Revisión conjunta de documentación y guía de migración. | Pendiente. |
