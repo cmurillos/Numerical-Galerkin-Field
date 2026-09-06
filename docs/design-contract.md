@@ -1210,7 +1210,7 @@ La implementación debe verificar al menos:
 
 ## D-013 — Contrato de uso con espacio admisible explícito
 
-**Estado:** contrato de uso aceptado; partes 1 a 3 completadas en esta rama.
+**Estado:** contrato de uso aceptado; partes 1 a 4 completadas en esta rama.
 
 ### Alcance y objetivo
 
@@ -1311,7 +1311,7 @@ recursivamente un objeto externo.
 
 `restrictions` admite una lista o tupla de objetos `ZeroTrace`, con valor predeterminado
 `()`. Los tipos no implementados producen `TypeError`. El descriptor declara los
-requisitos; su aplicación a una familia se hace explícitamente con `V.restrict`.
+requisitos; su aplicación a una familia se hace con `V.restrict` o al construirla con `V.basis`.
 Crear `Space` por sí solo no modifica ninguna base ni el ensamblaje del campo actual.
 
 Las verificaciones cubren la independencia entre componentes y dimensiones
@@ -1395,11 +1395,11 @@ subespacio. No se promete aún una realización dispersa de esta operación gene
 
 `V.restrict(raw)` no selecciona un tamaño reducido ni ortonormaliza en L2. Devuelve
 una nueva `TransformedBasis` vinculada a `V` mediante `.space`, sin mutar la familia
-original; sin restricciones devuelve la familia admitida sin modificarla. El paso
-operacional disponible sigue siendo `problem.orthonormalize(admissible)` seguido de
-`problem.field(basis=basis)`. La integración con las familias y `V.basis` pertenece a
-la parte 4: restringir pocos modos ya seleccionados no sustituye seleccionar modos
-en un espacio restringido.
+original; sin restricciones devuelve la familia admitida sin modificarla. La ruta manual
+sigue siendo `problem.orthonormalize(admissible)` seguido de
+`problem.field(basis=basis)`. Desde la parte 4, `V.basis` integra las familias y la
+normalización: restringir pocos modos ya seleccionados no sustituye seleccionar
+modos en un espacio restringido.
 
 Las bases programables y otras familias sin representación nodal verificable se
 rechazan en esta operación. Tampoco se aceptan subclases que puedan reemplazar la
@@ -1425,11 +1425,11 @@ Phi(z) = sum_{j=1}^N z_j phi_j.
 ```
 
 `size=N` siempre significa dimensión reducida total, también para varias componentes.
-Si se solicita un reparto específico entre componentes, deberá expresarse en la
-configuración de la base; su sintaxis se concretará en la parte 4. `degree` controla
-la construcción espacial y no equivale al número de modos. En familias de dimensión
-fijada por la malla o por una fuente personalizada, la parte 4 precisará cómo se
-declara y comprueba el tamaño sin truncar silenciosamente una familia.
+Un reparto específico entre componentes se expresa mediante `component_sizes`.
+`degree` controla la construcción espacial y no equivale al número de modos. Las
+familias de dimensión fijada por la malla o por una fuente personalizada conservan
+su espacio admisible completo; `size` opcional comprueba esa dimensión y produce un
+error si no coincide, sin truncar modos.
 
 Las restricciones se aplican antes de seleccionar los modos. En la familia laplaciana,
 el problema espectral debe resolverse sobre el espacio restringido; recortar una base
@@ -1440,6 +1440,88 @@ discretizado. Conserva su geometría, componentes, restricciones y datos de
 normalización. Se mantienen los controles de D-005 y D-007: la cuadratura usada al
 construir el campo debe validar la ortonormalidad dentro de la tolerancia, sin cambiar
 silenciosamente las coordenadas de una base existente.
+
+### Parte 4 implementada: familias sobre el espacio admisible
+
+```python
+basis = V.basis("laplacian", size=N, degree=1)
+```
+
+Esta llamada no necesita una forma débil. La preparación L2 se comparte internamente
+con `GalerkinProblem.orthonormalize` y `validate_basis` mediante un contexto geométrico;
+no se fabrica una EDP auxiliar. `basis.space` conserva la declaración y `basis.geometry`
+la misma geometría, con `value_shape=(V.components,)`.
+
+Para las familias nodales se ensamblan las matrices escalares FEM de masa y rigidez
+sobre toda la geometría. Cada componente determina sus nodos libres mediante todas
+las caras de `ZeroTrace`, incluidos nodos interiores de cara. Con los bloques
+restringidos se resuelve
+
+```text
+K_free q_j = lambda_j M_free q_j,
+q_i^T M_free q_j = delta_ij.
+```
+
+Los coeficientes eliminados se reconstruyen como cero. La selección espectral sucede
+después de restringir los bloques; no se recortan autovectores Neumann ya reducidos.
+Las matrices se ensamblan de forma dispersa; se reutilizan los solvers espectrales
+denso y disperso existentes, con controles de tamaño. La normalización FEM completa
+usa Cholesky sobre cada bloque libre y conserva todo su espacio.
+
+`size=N` cuenta modos totales. En `laplacian`, sin `component_sizes`, se eligen los
+menores N autovalores de la suma directa de todos los bloques. No se promete un
+reparto equilibrado ni una elección única dentro de un autoespacio múltiple; pueden
+aparecer modos acoplados entre componentes. `basis.component_sizes=None` lo indica.
+Con `component_sizes=(n_0,...,n_{c-1})`, se selecciona cada espectro por separado y se
+concatenan los modos por componente, ordenados dentro de cada bloque. Los enteros
+pueden ser cero, con suma positiva; la suma debe coincidir con `size` si se indica,
+o la determina si se omite. Una componente puede tener dimensión admisible cero
+mientras el espacio total siga siendo no nulo.
+
+Las cinco familias existentes tienen entrada en `V.basis`, con alcance explícito:
+
+- `laplacian`: selección espectral FEM conforme con `ZeroTrace` opcional.
+- `finite-element`: todo el espacio nodal libre, con `ZeroTrace` opcional; `size` y
+  `component_sizes` sólo pueden confirmar sus dimensiones.
+- `polynomial` y `fourier`: reutilizan las familias escalares sin restricciones
+  adicionales. Con `size=q*c+r`, el reparto predeterminado es q+1 para las primeras r
+  componentes y q para las restantes; `component_sizes` permite cambiarlo. Un
+  polinomio definido sólo por `degree` conserva todos sus monomios por componente.
+- `custom`: toda la familia fuente después de `V.restrict`, cuando corresponda,
+  seguida de ortonormalización. `size` opcional comprueba la dimensión resultante;
+  no admite reparto por componente de un espacio posiblemente acoplado.
+
+`ZeroTrace` con polinomios o Fourier se rechaza en esta entrega: no hay todavía una
+construcción certificada de su núcleo funcional. Tampoco se deduce periodicidad de
+una familia Fourier. Las fuentes personalizadas restringidas requieren las
+representaciones nodales certificadas de la parte 3. Una fuente sin restricciones
+adicionales puede ser programable; su forma de valor, geometría y Gram se validan,
+pero su regularidad queda declarada por el usuario y se registra como
+`regularity_verified=False`. Las familias conocidas conformes marcan `True`.
+En esta etapa `V.basis` sólo soporta `regularity` cero o uno, incluso para fuentes
+que el usuario afirme de mayor orden.
+
+Las bases operacionales se preparan en CPU/float64. La cuadratura nodal de
+normalización usa `2*degree` por defecto y la de validación dos órdenes más; ninguna
+puede ser inferior a `2*degree`. Las otras familias conservan sus controles de D-007.
+Se exponen `quadrature_order`, `validation_order`, `orthonormality_error` y, en
+laplacian, `eigenvalues`. Las familias nodales registran `admissible_dofs` por
+componente, `restriction_rank` y `restriction_error=0` por eliminación exacta de los
+coeficientes restringidos. En `custom` el residual de restricción sigue el significado
+normalizado de la SVD de la parte 3.
+
+`max_matrix_entries` protege las matrices principales de preparación, incluidos
+coeficientes, transformaciones y ramas espectrales densas; no estima toda la memoria
+simultánea. `max_dofs` y `max_quadrature_points` conservan sus límites geométricos.
+Las bases fuentes no se mutan. El vínculo a Space y los metadatos añadidos son del
+objeto en memoria; la persistencia nodal existente conserva la representación
+funcional pero aún no serializa este contrato de admisibilidad.
+
+Las verificaciones cubren espectros FEM Dirichlet conocidos en las ramas densa y
+dispersa, reparto global y explícito, caras de grado alto en geometría embebida,
+espacios nulos por componente, bases acopladas, fuentes declaradas, calor sobre el
+toro triangulado y términos Robin con una fuente sobre una región etiquetada.
+También se comprueban la acción y la derivada del campo usando la interfaz vigente.
 
 ### Forma débil y campo
 
@@ -1494,8 +1576,8 @@ def weak(u, v, dx, ds):
 G = GalerkinField(basis=basis, weak=weak, quadrature=8)
 ```
 
-`SimplicialDomain`, las medidas, las operaciones de la forma, `Space` y `ZeroTrace`
-ya existen. `V.basis` y la construcción final mostrada requieren implementación.
+`SimplicialDomain`, las medidas, las operaciones de la forma, `Space`, `ZeroTrace`
+y `V.basis` ya existen. La nueva construcción final mostrada corresponde a la parte 6.
 La llamada vigente sigue siendo `problem.field(basis=basis)`.
 
 ### Garantías y límites de verificación
@@ -1520,7 +1602,7 @@ acuerdos y las verificaciones acompañan cada entrega.
 | 1 | Contrato de uso, responsabilidades, dimensiones y API objetivo. | Aceptado y documentado en D-013. |
 | 2 | Objeto `Space`, componentes, regularidad y vínculo geométrico. | Implementada: descripción y validaciones. |
 | 3 | Lenguaje de restricciones y construcción inicial de traza cero. | Implementada: `ZeroTrace` y `V.restrict` para bases nodales. |
-| 4 | Familias sobre el espacio restringido y ortonormalización. | Pendiente. |
+| 4 | Familias sobre el espacio restringido y ortonormalización. | Implementada: `V.basis`, tamaño total, espectro restringido y L2. |
 | 5 | Periodicidad, media cero y sus combinaciones. | Pendiente. |
 | 6 | Construcción unificada de G y compatibilidad con la interfaz actual. | Pendiente. |
 | 7 | Ejemplos de aceptación del recorrido completo. | Pendiente. |

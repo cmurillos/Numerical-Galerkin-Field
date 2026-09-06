@@ -20,10 +20,10 @@ class Space:
     reference; do not mutate that geometry. The ambient state inner product is
     L2 with its induced measure, summed over components.
 
-    D-013 part 3 supports ZeroTrace restrictions on named exterior boundaries.
-    ``restrict`` constructs their nodal kernel before basis selection and L2
-    orthonormalization. Basis selection and direct field construction belong to
-    subsequent parts of the contract.
+    ``basis`` constructs a fixed L2-orthonormal basis in this space. ZeroTrace
+    constraints are supported for nodal FEM representations; unsupported family
+    combinations are rejected. ``restrict`` also exposes the unnormalized nodal
+    kernel. Direct field construction belongs to a subsequent part of D-013.
     """
 
     geometry: SimplicialDomain
@@ -60,4 +60,24 @@ class Space:
         """
         return restrict_basis(
             self, basis, tolerance=tolerance, max_matrix_entries=max_matrix_entries
+        )
+
+    def basis(self, family="laplacian", *, size=None, component_sizes=None, **options):
+        """Build an admissible, numerically L2-orthonormal operational basis.
+
+        ``size`` always counts total modes. Laplacian modes minimize the discrete
+        spectrum over the constrained space; ``component_sizes`` optionally fixes
+        their allocation. Polynomial/Fourier modes use a balanced allocation by
+        default. Finite-element/custom families preserve their full admissible
+        span; optional ``size`` checks its dimension, without truncation.
+
+        Trace constraints require a built-in nodal representation. Custom sources
+        must have value_shape=(components,); unknown source regularity remains the
+        user's declaration, recorded by ``regularity_verified=False``. This stage
+        implements only regularity zero or one. See D-013 for family limitations.
+        """
+        from .space_bases import build_space_basis
+
+        return build_space_basis(
+            self, family, size=size, component_sizes=component_sizes, **options
         )

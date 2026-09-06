@@ -16,6 +16,14 @@ The project follows [Semantic Versioning](https://semver.org/).
   unsupported representations and zero or dependent candidate spaces are rejected.
   The result is prepared for the existing L2 orthonormalization and field API.
 
+- `Space.basis`: geometry-only preparation of fixed, component-explicit L2 bases.
+  Laplacian modes are selected after full nodal constraint elimination; `size` is
+  always the total dimension and optional `component_sizes` specifies allocation.
+  Full finite-element and custom admissible spans are preserved without truncation.
+  Polynomial/Fourier families work without extra restrictions; unsupported trace
+  combinations are rejected. Custom source regularity distinguishes known
+  conformity from user declarations. Existing field and basis APIs remain available.
+
 ## [0.9.0] - 2026-09-05
 
 First public beta release.
