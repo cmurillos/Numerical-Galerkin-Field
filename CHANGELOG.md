@@ -6,6 +6,16 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Documentation
+
+- Make the Space-to-field workflow the main README and usage path, with explicit
+  scalar components, total mode counts and compatible existing constructors.
+- Add a migration guide with executable physical-equivalence, coordinate-transfer
+  and FEM-persistence examples. Clarify source revisions versus the original 0.9.0
+  release, tensor compatibility, restriction support and fixed boundary lifts.
+- Align the mathematical contract with Space and distinguish exact L2 identities
+  from quadrature checks. Complete D-013 part 8 and cross-link the guides.
+
 ### Added
 
 - Four executable D-013 acceptance examples using the complete Space-to-field API:

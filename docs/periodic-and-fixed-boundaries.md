@@ -2,6 +2,10 @@
 
 El recorrido sigue siendo geometría, espacio, base y campo autónomo. Las
 restricciones nuevas se combinan con `ZeroTrace` antes de seleccionar modos.
+La [guía de uso](usage.md) reúne los controles de la API y la
+[guía de migración](migration.md) explica cómo conservar las coordenadas de bases
+existentes. Los [ejemplos de aceptación](acceptance-examples.md) verifican el
+recorrido completo con datos espaciales y fronteras fijas.
 
 ## Periodicidad y media cero
 

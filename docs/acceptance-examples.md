@@ -5,6 +5,8 @@ Los cuatro programas recorren la API implementada: vértices, simplejos y subcon
 Cada archivo contiene `build_field()` para obtener G sin integrar y `run()` para
 proyectar datos iniciales, integrar, reconstruir y comprobar el resultado.
 La geometría y todos los datos del operador son fijos: G es autónomo.
+La [guía de uso](usage.md) describe cada operación y la [migración](migration.md)
+explica cómo adaptar programas existentes a este mismo recorrido.
 
 | Programa | Espacio de variaciones | Aproximación | Referencia principal |
 |---|---|---|---|
