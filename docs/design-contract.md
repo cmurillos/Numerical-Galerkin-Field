@@ -4,8 +4,9 @@ Este documento registra decisiones estables de Numerical Galerkin Field. Una dec
 aceptada sólo cambia mediante una revisión explícita del contrato.
 
 D-001 a D-012 describen el contrato de la versión 0.9.0. D-013 registra el contrato
-de uso aprobado para la próxima evolución de la API; su implementación está pendiente.
-Aceptar un contrato no significa que sus nuevas llamadas ya estén disponibles.
+de uso aprobado para la próxima evolución de la API. Su parte 2 implementa la
+descripción `Space`; las partes 3 a 8 siguen pendientes. Aceptar un contrato no
+significa que todas sus nuevas llamadas ya estén disponibles.
 
 ## D-001 — Bases fijas
 
@@ -1209,7 +1210,7 @@ La implementación debe verificar al menos:
 
 ## D-013 — Contrato de uso con espacio admisible explícito
 
-**Estado:** contrato de uso aceptado; implementación pendiente.
+**Estado:** contrato de uso aceptado; partes 1 y 2 completadas en esta rama.
 
 ### Alcance y objetivo
 
@@ -1275,8 +1276,52 @@ regularidad. Robin y Neumann se expresan mediante los términos de la forma déb
 según la formulación conforme elegida; no son restricciones de traza cero.
 
 La sintaxis detallada, la representación algebraica y las verificaciones de las
-restricciones se desarrollarán en la parte 3. Los nombres `Space` y `ZeroTrace` de los
-ejemplos siguientes designan la API objetivo, no símbolos actualmente exportados.
+restricciones se desarrollarán en la parte 3. `Space` está exportado desde la parte 2;
+`ZeroTrace` designa la API objetivo y todavía no está implementado.
+
+### Parte 2 implementada: descripción de Space
+
+```python
+from ngfield import Space
+
+V = Space(geometry=geometry, components=1, regularity=1, restrictions=[])
+```
+
+El constructor sólo acepta argumentos nombrados. `geometry` debe ser un
+`SimplicialDomain` ya construido; se conserva por referencia, con sus vértices,
+simplejos, regiones y fronteras. `Space` no reconstruye ni modifica esa geometría.
+
+`components` es un entero positivo requerido. `regularity` es un entero no negativo
+que vale uno por defecto y expresa el mismo orden solicitado para todas las
+componentes: cero declara L2 y uno declara H1. Los órdenes superiores son requisitos
+declarados, no afirmaciones de que ya exista una discretización conforme que los
+satisfaga. La selección y verificación de bases pertenecen a la parte 4.
+
+Las propiedades `geometry`, `components`, `regularity` y `restrictions` describen el
+espacio. `value_shape` devuelve siempre `(components,)`; las dimensiones geométricas
+se consultan en `V.geometry`. No existe todavía una dimensión reducida `V.dimension`:
+el número de modos se decide al elegir la base.
+
+La descripción es inmutable. Una lista vacía de restricciones se convierte en una
+tupla vacía propia, por lo que modificar posteriormente la lista del usuario no altera
+`V`. El objeto geométrico se comparte y no debe mutarse después de construir espacios,
+bases o campos; la inmutabilidad de `Space` no equivale a copiar o congelar
+recursivamente un objeto externo.
+
+En esta entrega, `restrictions` admite únicamente una lista o tupla vacía; su valor
+predeterminado es `()`. Una secuencia no vacía produce `NotImplementedError` y otros
+tipos producen `TypeError`. Nunca se acepta una condición que no vaya a aplicarse. La
+API vigente permite trabajar con una base explícitamente admisible mientras se
+implementa la parte 3.
+
+Esta parte añade el descriptor y sus validaciones. No añade `V.basis`, la construcción
+de restricciones ni la nueva llamada de `GalerkinField`. `Space` no convierte una
+base existente, no certifica regularidad y no modifica el ensamblaje del campo actual.
+
+Las verificaciones cubren la independencia entre componentes y dimensiones
+geométricas, conservación de medidas y etiquetas, rechazo de restricciones aún no
+implementadas, inmutabilidad de la descripción y uso de sus datos con la ruta vigente
+de campos de una y dos componentes.
 
 ### Base admisible y dimensión reducida
 
@@ -1359,8 +1404,8 @@ def weak(u, v, dx, ds):
 G = GalerkinField(basis=basis, weak=weak, quadrature=8)
 ```
 
-`SimplicialDomain`, las medidas y las operaciones de la forma ya existen. `Space`,
-`ZeroTrace`, `V.basis` y la construcción final mostrada requieren implementación.
+`SimplicialDomain`, las medidas, las operaciones de la forma y el descriptor `Space`
+ya existen. `ZeroTrace`, `V.basis` y la construcción final mostrada requieren implementación.
 La llamada vigente sigue siendo `problem.field(basis=basis)`.
 
 ### Garantías y límites de verificación
@@ -1380,10 +1425,10 @@ La llamada vigente sigue siendo `problem.field(basis=basis)`.
 Cada parte se discute, implementa y verifica antes de avanzar. La documentación de
 acuerdos y las verificaciones acompañan cada entrega.
 
-| Parte | Entrega | Estado al aceptar D-013 |
+| Parte | Entrega | Estado de avance |
 |---|---|---|
 | 1 | Contrato de uso, responsabilidades, dimensiones y API objetivo. | Aceptado y documentado en D-013. |
-| 2 | Objeto `Space`, componentes, regularidad y vínculo geométrico. | Pendiente. |
+| 2 | Objeto `Space`, componentes, regularidad y vínculo geométrico. | Implementada: descripción y validaciones. |
 | 3 | Lenguaje de restricciones y construcción inicial de traza cero. | Pendiente. |
 | 4 | Familias sobre el espacio restringido y ortonormalización. | Pendiente. |
 | 5 | Periodicidad, media cero y sus combinaciones. | Pendiente. |

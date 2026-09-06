@@ -29,6 +29,7 @@ from .galerkin import GalerkinProblem
 from .geometry import SimplicialDomain
 from .io import load_basis, save_basis
 from .problem import Problem
+from .space import Space
 from .spaces import (
     Basis,
     CallableBasis,
@@ -57,6 +58,7 @@ __all__ = [
     "Problem",
     "LegacyGalerkinField",
     "SimplicialDomain",
+    "Space",
     "TransformedBasis",
     "contract",
     "cos",

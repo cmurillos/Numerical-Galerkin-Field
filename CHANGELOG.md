@@ -4,6 +4,15 @@ All notable changes to Numerical Galerkin Field are documented in this file.
 
 The project follows [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- `Space`: a frozen description of geometry, state components and requested Sobolev
+  regularity under the approved D-013 contract. Nonempty restrictions are explicitly
+  rejected until their construction is implemented; basis and field construction
+  continue through the existing API.
+
 ## [0.9.0] - 2026-09-05
 
 First public beta release.
