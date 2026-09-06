@@ -1,10 +1,10 @@
 # Interfaz general de Numerical Galerkin Field
 
-Esta guía conserva el recorrido de 0.9.0 y documenta `Space` y `ZeroTrace` añadidos
-en esta rama. El
+Esta guía conserva el recorrido de 0.9.0 y documenta `Space`, `ZeroTrace` y
+`V.basis(...)` añadidos en esta rama. El
 [contrato D-013](design-contract.md#d-013--contrato-de-uso-con-espacio-admisible-explícito)
-registra el recorrido futuro completo. `V.basis` y la nueva construcción
-directa de `GalerkinField` todavía no están implementados.
+registra el recorrido completo. La construcción de la base desde el espacio ya
+está disponible; la nueva entrada directa de `GalerkinField` corresponde a la parte 6.
 
 ## Problema mínimo
 
@@ -24,7 +24,7 @@ def weak(u, v, dx, ds):
 
 
 problem = GalerkinProblem(vertices=vertices, simplices=simplices, weak=weak)
-basis = problem.basis("laplacian", size=8, degree=1)
+basis = problem.basis("laplacian", size=3, degree=1)
 G = problem.field(basis=basis)
 ```
 
@@ -84,9 +84,8 @@ base o un campo.
 equivale a la tupla vacía. Los tipos no implementados se rechazan explícitamente.
 Una etiqueta de frontera nunca impone por sí sola una restricción.
 
-Esta entrega proporciona la descripción del espacio. Para calcular un campo se sigue
-usando `GalerkinProblem` y una base explícitamente admisible; `V.basis` y su conexión
-directa con `GalerkinField` llegarán en las partes siguientes. Las bases escalares
+La base se construye con `V.basis(...)`, como se describe en la parte 4 a continuación.
+Para calcular el campo se sigue usando `GalerkinProblem.field`. Las bases escalares
 existentes con `value_shape=()` conservan su comportamiento.
 
 ## Traza cero por componente — D-013, parte 3
@@ -128,7 +127,8 @@ G = problem.field(basis=basis)
 
 Las restricciones no alteran los términos de `weak`: Robin y Neumann se siguen
 escribiendo mediante las medidas de frontera. `V.restrict` tampoco selecciona los
-modos laplacianos; esa integración corresponde a la parte 4.
+modos laplacianos; `V.basis("laplacian", ...)` realiza esa selección en el espacio
+restringido, como se describe a continuación.
 
 El cálculo del núcleo usa SVD y permite `tolerance=1e-12` y
 `max_matrix_entries=10_000_000` como valores predeterminados. El segundo limita la
@@ -142,6 +142,128 @@ bases programables sin representación nodal verificable. Esta operación admite
 conformidad H1 y rechaza órdenes mayores; declarar H2 no convierte elementos Lagrange
 continuos en elementos conformes H2. Para un toro cerrado se dejan vacías las
 restricciones de frontera.
+
+## Bases del espacio admisible — D-013, parte 4
+
+La base se prepara antes de proporcionar la forma débil. Este ejemplo completo
+construye cuatro modos de H1 con extremos fijos:
+
+```python
+import numpy as np
+from ngfield import SimplicialDomain, Space, ZeroTrace
+
+vertices = np.linspace(0, 1, 17)[:, None]
+simplices = np.column_stack((np.arange(16), np.arange(1, 17)))
+geometry = SimplicialDomain(vertices, simplices)
+V = Space(
+    geometry=geometry,
+    components=1,
+    restrictions=[ZeroTrace(component=0, boundary="all")],
+)
+basis = V.basis("laplacian", size=4, degree=1)
+```
+
+`basis.dimension == 4`, `basis.value_shape == (1,)` y `basis.space is V`.
+La biblioteca elimina los grados de libertad de las caras restringidas del problema
+FEM completo **antes de calcular los autovectores**. Conserva nodos de caras de grado
+alto y geometrías embebidas bajo el mismo contrato. Una superficie cerrada, como el
+toro triangulado, usa `restrictions=[]` y conserva el modo constante si se incluye
+el menor autovalor. Se trabaja sobre la superficie afín triangulada.
+
+`size=N` siempre es la dimensión total. Para varias componentes hay dos elecciones:
+
+```python
+W = Space(geometry=geometry, components=2)
+global_basis = W.basis("laplacian", size=16)
+allocated_basis = W.basis("laplacian", size=16, component_sizes=(8, 8))
+```
+
+La primera selecciona los 16 menores autovalores de la suma directa de los espacios
+restringidos. Los autovalores repetidos pueden dar modos que mezclan componentes;
+no se garantiza un reparto ni que cada componente esté representada cuando N es
+pequeño. `global_basis.component_sizes` es `None`.
+
+La segunda reserva ocho modos para cada componente y los ordena por componente,
+con autovalores crecientes dentro de cada bloque. `component_sizes` acepta una lista
+o tupla de enteros no negativos; su suma debe ser positiva y coincidir con `size`
+si ambos se proporcionan. También se puede omitir `size` y usar sólo esa tupla.
+Un cero excluye esa componente de la aproximación sin cambiar la forma del estado.
+No se puede exceder la dimensión admisible de ninguna componente.
+
+| Familia en `V.basis` | Tamaño | Restricciones admitidas en esta etapa |
+|---|---|---|
+| `"laplacian"` | `size` total o `component_sizes`; selección espectral restringida. | `ZeroTrace`, por componente y cara completa. |
+| `"finite-element"` | Todos los grados de libertad libres; `size` opcional comprueba la dimensión. | `ZeroTrace`, por componente y cara completa. |
+| `"polynomial"` | `size` total o `degree` para todos los monomios por componente. | Sin restricciones adicionales. |
+| `"fourier"` | `size` total o `component_sizes`. | Sin restricciones adicionales; no certifica identificaciones periódicas de la geometría. |
+| `"custom"` | Todo el espacio de la fuente después de restringirlo; `size` opcional comprueba la dimensión. | `ZeroTrace` sólo para las representaciones nodales de la parte 3. |
+
+Para polinomios y Fourier, el reparto predeterminado es equilibrado: con
+`size = q*c + r` se asignan `q+1` modos a las primeras `r` componentes y `q` a las
+restantes. `component_sizes` permite cambiarlo; los modos quedan agrupados por
+componente. Las opciones escalares de las familias existentes (`degree`, `periods`,
+`origin`, `center`, `scale`) conservan su significado. Los polinomios son funciones
+de coordenadas ambientes: una familia dependiente al restringirse a la geometría
+puede fallar la ortonormalización y no se elimina automáticamente.
+
+En `finite-element`, el grado y la malla determinan la dimensión por componente,
+menos los nodos restringidos. No se trunca la base nodal; un `component_sizes`
+explícito debe coincidir con esas dimensiones. En `custom`, se conserva toda la
+familia admisible y no se acepta `component_sizes`, porque sus modos pueden estar
+acoplados. Por ejemplo:
+
+```python
+from ngfield import ComponentBasis, FiniteElementBasis
+
+source = ComponentBasis(FiniteElementBasis(geometry, degree=2), components=1)
+custom_basis = V.basis("custom", source=source, quadrature_order=6)
+```
+
+La fuente debe tener forma de valor `(V.components,)`. Cuando hay `ZeroTrace`, primero
+se calcula su núcleo nodal y después se ortonormaliza. Un callback arbitrario sin
+restricciones también puede entrar como fuente, pero su pertenencia al espacio
+Sobolev queda bajo responsabilidad del usuario: `basis.regularity_verified` será
+`False`. En las familias construidas y las composiciones nodales/polinómicas
+conocidas será `True` para la regularidad soportada. Las evaluaciones numéricas no
+certifican regularidad de un callback ni su traza completa. `regularity>1` se rechaza
+por ahora en todas las familias de `V.basis`.
+
+La preparación conserva `quadrature_order`, `validation_order` y
+`orthonormality_error`. En las familias nodales el orden predeterminado es
+`2*degree`, la validación usa dos órdenes más, y ambos órdenes deben ser al menos
+`2*degree`. Los modos laplacianos incluyen `eigenvalues`; las dos familias nodales
+incluyen `admissible_dofs` por componente y el rango de las restricciones. En ellas
+`restriction_error=0` registra la eliminación exacta de coeficientes nodales; en una
+fuente personalizada restringida sigue siendo el residual normalizado de la SVD.
+
+Se conservan los controles de cuadratura y tolerancia de las familias anteriores.
+`max_matrix_entries` limita las matrices principales de preparación (20 millones
+por defecto; 10 millones en `custom`), sin ser una cota exacta de memoria total.
+`max_dofs` limita la construcción nodal y `max_quadrature_points` limita la cuadratura.
+La ortonormalización de la familia FEM completa utiliza matrices densas: para una
+aproximación reducida se puede elegir `"laplacian"`. La preparación usa CPU y float64;
+el campo posterior puede tabular la base en otro dispositivo y precisión.
+
+El vínculo `.space` y los diagnósticos nuevos se conservan en el objeto en memoria.
+La serialización existente de `FiniteElementBasis` conserva los coeficientes y su
+geometría, pero todavía no reconstruye la declaración de `Space` ni estos metadatos.
+No hay cambios silenciosos de coordenadas al construir el campo. Hasta la parte 6,
+la conexión ejecutable sigue siendo:
+
+```python
+from ngfield import GalerkinProblem, grad, inner
+
+
+def weak(u, v, dx, ds):
+    return -inner(grad(u[0]), grad(v[0])) * dx
+
+
+G = GalerkinProblem(geometry=geometry, weak=weak).field(basis=basis)
+```
+
+Las condiciones naturales del problema espectral sólo definen la familia de
+aproximación. Los coeficientes y términos Robin/Neumann de la evolución siguen en
+`weak`, usando `dx`, `dx("region")` y `ds("boundary")`.
 
 ## Geometría simplicial
 

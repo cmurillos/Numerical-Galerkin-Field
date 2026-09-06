@@ -255,81 +255,11 @@ def _projection_error_exact_order(source, basis):
     return None if source_degree is None else 2 * max(basis_degree, source_degree)
 
 
-class GalerkinProblem:
-    """A simplicial geometry plus one complete weak form.
+class _BasisGeometry:
+    """Geometry-only L2 preparation shared by Space and GalerkinProblem."""
 
-    No boundary-condition type is part of this interface. The supplied basis defines
-    the admissible finite-dimensional space; named boundary measures only integrate
-    terms explicitly present in weak(u,v,dx,ds).
-    """
-
-    def __init__(
-        self,
-        *,
-        weak,
-        geometry=None,
-        vertices=None,
-        simplices=None,
-        boundaries=None,
-        regions=None,
-    ):
-        if not callable(weak):
-            raise TypeError("weak must be callable.")
-        if geometry is None:
-            if vertices is None or simplices is None:
-                raise TypeError("Provide geometry or both vertices and simplices.")
-            self.geometry = SimplicialDomain(vertices, simplices, boundaries, regions)
-        else:
-            if not isinstance(geometry, SimplicialDomain):
-                raise TypeError("geometry must be a SimplicialDomain.")
-            if any(value is not None for value in (vertices, simplices, boundaries, regions)):
-                raise ValueError(
-                    "geometry cannot be combined with vertices, simplices, boundaries, or regions."
-                )
-            self.geometry = geometry
-        self.weak = weak
-
-    @property
-    def vertices(self):
-        return self.geometry.vertices
-
-    @property
-    def simplices(self):
-        return self.geometry.simplices
-
-    @property
-    def boundaries(self):
-        return self.geometry.boundaries
-
-    @property
-    def regions(self):
-        return self.geometry.regions
-
-    def basis(self, family="laplacian", **options):
-        """Build a fixed L2-orthonormal basis adapted to this geometry."""
-        from .basis_factory import build_basis
-
-        return build_basis(self, family, options)
-
-    def field(
-        self,
-        *,
-        basis,
-        quadrature=None,
-        max_quadrature_points=1_000_000,
-        max_intermediate_entries=10_000_000,
-        device="cpu",
-        dtype=torch.float64,
-    ):
-        return GalerkinField(
-            self,
-            basis,
-            quadrature=quadrature,
-            max_quadrature_points=max_quadrature_points,
-            max_intermediate_entries=max_intermediate_entries,
-            device=device,
-            dtype=dtype,
-        )
+    def __init__(self, geometry):
+        self.geometry = geometry
 
     def orthonormalize(
         self,
@@ -424,6 +354,83 @@ class GalerkinProblem:
                 "Use problem.orthonormalize(...) or problem.basis(...)."
             )
         return error
+
+
+class GalerkinProblem(_BasisGeometry):
+    """A simplicial geometry plus one complete weak form.
+
+    No boundary-condition type is part of this interface. The supplied basis defines
+    the admissible finite-dimensional space; named boundary measures only integrate
+    terms explicitly present in weak(u,v,dx,ds).
+    """
+
+    def __init__(
+        self,
+        *,
+        weak,
+        geometry=None,
+        vertices=None,
+        simplices=None,
+        boundaries=None,
+        regions=None,
+    ):
+        if not callable(weak):
+            raise TypeError("weak must be callable.")
+        if geometry is None:
+            if vertices is None or simplices is None:
+                raise TypeError("Provide geometry or both vertices and simplices.")
+            self.geometry = SimplicialDomain(vertices, simplices, boundaries, regions)
+        else:
+            if not isinstance(geometry, SimplicialDomain):
+                raise TypeError("geometry must be a SimplicialDomain.")
+            if any(value is not None for value in (vertices, simplices, boundaries, regions)):
+                raise ValueError(
+                    "geometry cannot be combined with vertices, simplices, boundaries, or regions."
+                )
+            self.geometry = geometry
+        self.weak = weak
+
+    @property
+    def vertices(self):
+        return self.geometry.vertices
+
+    @property
+    def simplices(self):
+        return self.geometry.simplices
+
+    @property
+    def boundaries(self):
+        return self.geometry.boundaries
+
+    @property
+    def regions(self):
+        return self.geometry.regions
+
+    def basis(self, family="laplacian", **options):
+        """Build a fixed L2-orthonormal basis adapted to this geometry."""
+        from .basis_factory import build_basis
+
+        return build_basis(self, family, options)
+
+    def field(
+        self,
+        *,
+        basis,
+        quadrature=None,
+        max_quadrature_points=1_000_000,
+        max_intermediate_entries=10_000_000,
+        device="cpu",
+        dtype=torch.float64,
+    ):
+        return GalerkinField(
+            self,
+            basis,
+            quadrature=quadrature,
+            max_quadrature_points=max_quadrature_points,
+            max_intermediate_entries=max_intermediate_entries,
+            device=device,
+            dtype=dtype,
+        )
 
 
 class GalerkinField:
