@@ -87,7 +87,16 @@ __all__ = [
 
 
 def GalerkinField(*args, **kwargs):
-    """Construct the general field, with transparent compatibility for version 0.1."""
-    if args and isinstance(args[0], GalerkinProblem):
+    """Construct from basis/weak, an explicit GalerkinProblem, or the legacy API.
+
+    The direct route is ``GalerkinField(basis=V.basis(...), weak=weak, ...)``.
+    Existing ``GalerkinField(problem, basis)`` and legacy ``(basis, problem)``
+    calls retain their argument order; keyword-based versions are also supported.
+    """
+    general_problem = (args and isinstance(args[0], GalerkinProblem)) or isinstance(
+        kwargs.get("problem"), GalerkinProblem
+    )
+    direct = "weak" in kwargs or (not args and "problem" not in kwargs)
+    if general_problem or direct:
         return GeneralGalerkinField(*args, **kwargs)
     return LegacyGalerkinField(*args, **kwargs)

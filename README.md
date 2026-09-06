@@ -84,6 +84,36 @@ may precede `N`.
 | `G.time_error(...)` | Compare temporally refined trajectories. |
 | `G.quadrature_error(z)` | Compare fields assembled with refined quadrature. |
 
+## Space-based construction (development)
+
+The D-013 development API also builds the field directly from an admissible space.
+It is not yet part of the published 0.9.0 release. Using the vertices and simplices
+above, homogeneous fixed endpoints can be declared before selecting the modes:
+
+```python
+from ngfield import GalerkinField, SimplicialDomain, Space, ZeroTrace, grad, inner
+
+geometry = SimplicialDomain(vertices, simplices)
+V = Space(
+    geometry=geometry,
+    components=1,
+    restrictions=[ZeroTrace(component=0, boundary="all")],
+)
+basis = V.basis("laplacian", size=8)
+
+
+def weak(u, v, dx, ds):
+    return -0.1 * inner(grad(u[0]), grad(v[0])) * dx
+
+
+G = GalerkinField(basis=basis, weak=weak)
+```
+
+State components remain explicit: initial functions for this field return
+`[points,1]`, and reconstruction returns `[...,points,1]`. `G.space`, `G.geometry`
+and `G.basis` expose the associated objects. The existing construction above remains
+supported; see the [usage guide](docs/usage.md) for compatibility and numerical options.
+
 ## Geometry and weak forms
 
 The geometry is an affine simplicial complex with vertices `[M,p]` and simplices
@@ -101,8 +131,8 @@ def weak(u, v, dx, ds):
 
 The expression must be scalar and linear in `v`; it may be nonlinear in `u`.
 Boundary labels restrict integration only. Essential conditions and other admissibility
-constraints belong to the selected basis rather than to special boundary-condition
-classes.
+constraints must be satisfied by the selected basis. The development API declares
+supported constraints through `Space` before preparing that basis.
 
 ## Bases and differentiation
 

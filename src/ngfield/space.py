@@ -23,7 +23,8 @@ class Space:
     ``basis`` constructs a fixed L2-orthonormal basis in this space. ZeroTrace, Periodic and
     MeanZero constraints are supported for nodal FEM representations; unsupported family
     combinations are rejected. ``restrict`` also exposes the unnormalized nodal
-    kernel. Direct field construction belongs to a subsequent part of D-013.
+    kernel. Pass an operational basis to GalerkinField(basis=basis, weak=weak)
+    to construct the autonomous coordinate field directly.
     """
 
     geometry: SimplicialDomain

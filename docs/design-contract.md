@@ -4,9 +4,10 @@ Este documento registra decisiones estables de Numerical Galerkin Field. Una dec
 aceptada sólo cambia mediante una revisión explícita del contrato.
 
 D-001 a D-012 describen el contrato de la versión 0.9.0. D-013 registra el contrato
-de uso aprobado para la próxima evolución de la API. Sus partes 2 y 3 implementan
-`Space` y la construcción de traza cero; las partes 4 a 8 siguen pendientes. Aceptar un contrato no
-significa que todas sus nuevas llamadas ya estén disponibles.
+de uso aprobado para la próxima evolución de la API. Sus partes 1 a 6 están
+implementadas en esta rama, desde `Space` y sus bases restringidas hasta la
+construcción directa de G. Las partes 7 y 8 siguen pendientes; estas ampliaciones
+todavía no pertenecen a la versión publicada 0.9.0.
 
 ## D-001 — Bases fijas
 
@@ -28,7 +29,8 @@ coeficientes `z`, no respecto de los parámetros usados para definir la base.
 **Estado:** aceptada.
 
 Esta es la interfaz disponible en 0.9.0. D-013 define el recorrido futuro basado en un
-espacio admisible explícito; la transición de interfaz se resolverá en su parte 6.
+espacio admisible explícito; su parte 6 implementa la entrada directa del campo
+y conserva la compatibilidad de las interfaces anteriores.
 
 La construcción principal es
 
@@ -1210,7 +1212,7 @@ La implementación debe verificar al menos:
 
 ## D-013 — Contrato de uso con espacio admisible explícito
 
-**Estado:** contrato de uso aceptado; partes 1 a 5 completadas en esta rama.
+**Estado:** contrato de uso aceptado; partes 1 a 6 completadas en esta rama.
 
 ### Alcance y objetivo
 
@@ -1269,7 +1271,8 @@ Para `c` componentes, el producto interno inicial es
 
 En el nuevo recorrido, las componentes son explícitas incluso para un estado escalar:
 `components=1` y `u[0]`, con forma de valor `(1,)`. Esto no cambia la forma de valor
-escalar `()` que admite la API 0.9.0. Su compatibilidad se resolverá en la parte 6.
+escalar `()` que admite la API 0.9.0. La parte 6 conserva esa ruta sin promover
+componentes silenciosamente.
 
 `regularity=1` exige H1; no es una instrucción que convierta cualquier familia en una
 base conforme. `restrictions=[]` indica que no hay restricciones adicionales a la
@@ -1598,6 +1601,68 @@ componente, medias regionales redundantes, escalado, errores de conectividad,
 proyección y reconstrucción con Dirichlet fija y una lámina con equilibrio conocido
 bajo Dirichlet, Neumann y Robin espaciales fijos.
 
+### Parte 6 implementada: campo desde la base y la forma
+
+```python
+G = GalerkinField(basis=basis, weak=weak, quadrature=8)
+```
+
+La entrada directa usa el Space asociado a la base para obtener la geometría y
+sus subconjuntos. Internamente prepara el mismo `GalerkinProblem` y el mismo campo
+general usados por la interfaz existente; no duplica el ensamblaje ni los métodos
+numéricos. No requiere estado inicial, tiempos ni matriz de masa del usuario.
+
+Se exige una base asociada a un `Space`, con forma de valor `(components,)` y malla
+compatible. Una instancia geométrica equivalente puede usarse en la ruta con
+problema explícito, pero debe conservar las etiquetas y los conjuntos de regiones
+y fronteras del Space. El orden de los índices dentro de un conjunto no cambia su
+significado. La geometría del Space fija el significado de los subconjuntos;
+los portadores internos de la base pueden proceder de la misma malla con otras
+etiquetas, como en la parte 3.
+
+La forma débil se construye una vez, con las verificaciones existentes de integrandos
+escalares y linealidad en el test. Los órdenes y tablas necesarios se preparan con
+las reglas de cuadratura vigentes. El Gram se valida sin modificar ni sustituir la
+base. `G.basis` conserva la instancia entregada; `G.space` expone el Space y
+`G.geometry` la geometría usada. Las coordenadas, evaluaciones por lotes, derivadas
+respecto de z, proyección, reconstrucción e integración temporal mantienen el
+contrato anterior. Las fuentes fijas se tabulan durante la preparación.
+
+La compatibilidad distingue explícitamente tres formas de construcción:
+
+- `GalerkinField(basis=basis, weak=weak)`, con argumentos nombrados y base de Space.
+- `GalerkinField(problem, basis)`, su variante con ambos argumentos nombrados y
+  `problem.field(basis=basis)`, para `GalerkinProblem` explícito.
+- `GalerkinField(legacy_basis, legacy_problem)` o sus argumentos nombrados, para
+  los tipos originales `GalerkinBasis` y `Problem`.
+
+`GeneralGalerkinField` sigue exponiendo la clase general y admite las dos primeras
+rutas. No se permite entregar a la vez `weak` y `problem`, ni reemplazar la geometría
+en la entrada directa. Las bases anteriores sin Space siguen usándose con problema
+explícito, con `G.space=None`, manteniendo su forma escalar `()` cuando corresponda.
+Esto incluye bases FEM cargadas mediante la serialización existente, que todavía
+no reconstruye la declaración de Space.
+
+Las combinaciones lineales de `TransformedBasis` conservan el Space y la información
+de regularidad verificada/declarada, pues las restricciones implementadas son
+homogéneas. No heredan autovalores ni un certificado de ortonormalidad después de
+una transformación arbitraria. Las rotaciones ortonormales pueden usarse en la
+entrada directa; las transformaciones que alteran el Gram se rechazan. La
+normalización explícita de un resultado de `V.restrict` también conserva su Space.
+
+La admisibilidad procede de la construcción de la base. El campo comprueba su
+consistencia con la declaración, la forma y la métrica; no recertifica regularidad
+de callbacks ni impone restricciones por adjuntar manualmente un atributo `.space`.
+Las geometrías y fuentes deben mantenerse fijas. La dependencia explícita del tiempo,
+la generación automática de levantamientos y la persistencia completa del espacio
+siguen fuera de esta entrega.
+
+Las pruebas cubren todas las rutas, datos analíticos de calor y reacción no lineal,
+lotes y sus derivadas, cambios explícitos de coordenadas, rechazo de Gram incorrecto,
+periodicidad con media cero, toro embebido, condiciones mixtas con levantamiento,
+coeficientes fijos, controles numéricos y errores de malla, etiquetas y componentes.
+Se conserva la ruta original de campos y la carga de bases existentes.
+
 ### Forma débil y campo
 
 `weak(u, v, dx, ds)` conserva el lenguaje de D-004. Cada integrando es escalar y la
@@ -1616,7 +1681,7 @@ La entrada tiene forma `[..., N]` y la salida conserva esa forma. Geometría, ba
 coeficientes y cuadratura quedan fijos al construir `G`; se conserva la diferenciación
 respecto de `z` bajo D-006. No se requieren datos iniciales ni tiempos para construirlo.
 
-### Ejemplo de uso objetivo — todavía no ejecutable
+### Ejemplo de uso implementado — entradas espaciales del usuario
 
 El usuario prepara fuera de este ejemplo los vértices, conectividades, subconjuntos,
 el tamaño `N` y los coeficientes físicos fijos. La forma describe difusión con fuente
@@ -1651,9 +1716,9 @@ def weak(u, v, dx, ds):
 G = GalerkinField(basis=basis, weak=weak, quadrature=8)
 ```
 
-`SimplicialDomain`, las medidas, las operaciones de la forma, `Space`, `ZeroTrace`
-y `V.basis` ya existen. La nueva construcción final mostrada corresponde a la parte 6.
-La llamada vigente sigue siendo `problem.field(basis=basis)`.
+Todo el recorrido mostrado está implementado en esta rama. `vertices`, `simplices`,
+las selecciones, N y los coeficientes fijos deben ser proporcionados por el usuario.
+La llamada `problem.field(basis=basis)` permanece disponible por compatibilidad.
 
 ### Garantías y límites de verificación
 
@@ -1679,7 +1744,7 @@ acuerdos y las verificaciones acompañan cada entrega.
 | 3 | Lenguaje de restricciones y construcción inicial de traza cero. | Implementada: `ZeroTrace` y `V.restrict` para bases nodales. |
 | 4 | Familias sobre el espacio restringido y ortonormalización. | Implementada: `V.basis`, tamaño total, espectro restringido y L2. |
 | 5 | Periodicidad, media cero y sus combinaciones. | Implementada: restricciones nodales y recetas verificadas de fronteras fijas. |
-| 6 | Construcción unificada de G y compatibilidad con la interfaz actual. | Pendiente. |
+| 6 | Construcción unificada de G y compatibilidad con la interfaz actual. | Implementada: entrada directa, consistencia y compatibilidad. |
 | 7 | Ejemplos de aceptación del recorrido completo. | Pendiente. |
 | 8 | Revisión conjunta de documentación y guía de migración. | Pendiente. |
 

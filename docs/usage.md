@@ -3,12 +3,130 @@
 Esta guía conserva el recorrido de 0.9.0 y documenta `Space`, `ZeroTrace`, `Periodic`, `MeanZero` y
 `V.basis(...)` añadidos en esta rama. El
 [contrato D-013](design-contract.md#d-013--contrato-de-uso-con-espacio-admisible-explícito)
-registra el recorrido completo. La construcción de la base desde el espacio ya
-está disponible; la nueva entrada directa de `GalerkinField` corresponde a la parte 6.
+registra el recorrido completo, implementado hasta la construcción directa de
+`GalerkinField` en la parte 6. Estas incorporaciones están en la rama de desarrollo;
+la versión publicada 0.9.0 conserva las llamadas de compatibilidad descritas aquí.
 
-## Problema mínimo
+## Problema mínimo — construcción desde Space
 
-La interfaz central sólo recibe la geometría simplicial y una forma débil completa:
+El usuario prepara la geometría, declara el espacio, elige la base y proporciona
+la forma débil. Este ejemplo ejecutable construye el campo del calor con extremos
+fijos en cero; no requiere todavía una condición inicial ni tiempos:
+
+```python
+import numpy as np
+from ngfield import GalerkinField, SimplicialDomain, Space, ZeroTrace, grad, inner
+
+vertices = np.linspace(0, 1, 17)[:, None]
+simplices = np.column_stack((np.arange(16), np.arange(1, 17)))
+geometry = SimplicialDomain(vertices, simplices)
+V = Space(
+    geometry=geometry,
+    components=1,
+    restrictions=[ZeroTrace(component=0, boundary="all")],
+)
+basis = V.basis("laplacian", size=8, degree=1)
+
+
+def weak(u, v, dx, ds):
+    return -0.1 * inner(grad(u[0]), grad(v[0])) * dx
+
+
+G = GalerkinField(basis=basis, weak=weak)
+```
+
+`G.basis is basis`, `G.space is V` y `G.geometry is geometry`. Su dimensión es ocho
+coordenadas, la forma de valor físico es `(1,)` y el campo cumple
+`G: R^8 -> R^8`, con `G_i(z)=a(Phi(z);phi_i)`.
+
+La base entrega la geometría y sus etiquetas; no se repiten esos argumentos en la
+construcción del campo. La condición esencial ya fue aplicada al construir la
+base, antes del problema espectral. La forma sigue usando componentes explícitas,
+`dx`, `dx("region")` y `ds("boundary")`. Cambiar la geometría o las restricciones
+requiere preparar un espacio y una base compatibles.
+
+Los controles numéricos conservan sus nombres y significado:
+
+```python
+G = GalerkinField(
+    basis=basis,
+    weak=weak,
+    quadrature=8,
+    max_quadrature_points=1_000_000,
+    max_intermediate_entries=10_000_000,
+)
+```
+
+También admite `device` y `dtype`; por defecto usa CPU y `torch.float64`.
+`quadrature=None` selecciona el procedimiento automático existente, un entero
+selecciona el orden y un real en (0,1) solicita adaptación por tolerancia. La
+construcción valida el Gram con su cuadratura; no normaliza nuevamente la base ni
+cambia sus coordenadas para hacerla pasar. `G.mass_matrix` es un diagnóstico del
+Gram calculado, no un argumento adicional que deba aportar el usuario.
+
+| Consulta u operación | Significado |
+|---|---|
+| `G.space`, `G.geometry`, `G.basis` | Espacio asociado, geometría usada y base operacional. |
+| `G.dimension`, `G.value_shape` | Dimensión reducida total N y componentes físicas `(c,)`. |
+| `G(z)` | Estado de forma `[...,N]` a velocidad de la misma forma. |
+| `G.project(u0)` | Función física a coordenadas; con Space, `u0(x)` debe devolver `[points,c]`. |
+| `G.reconstruct(Z, points)` | Coordenadas a valores `[...,points,c]`. |
+| `G.solve(z0, times)` | Integración temporal de la dinámica autónoma ya preparada. |
+
+Las derivadas de PyTorch respecto de z, los lotes vacíos, el traslado de tablas y
+los métodos de evaluación espacial conservan el comportamiento documentado. Los
+coeficientes fijos se tabulan durante la preparación; evaluar G no vuelve a llamar
+la forma débil ni las fuentes de coeficientes.
+
+La entrada directa exige una base asociada a `Space`, normalmente obtenida con
+`V.basis`. Comprueba la forma de valor y la malla. Si se usa además un problema
+explícito con esa base, exige los mismos conjuntos etiquetados de fronteras y
+regiones; acepta otra instancia geométrica con los mismos arreglos y conjuntos,
+pero no admite cambiar el significado de una etiqueta. La geometría de `Space`
+es la referencia para las etiquetas, incluso cuando la base candidata procedía
+de un portador nodal con otras etiquetas sobre la misma malla.
+
+La admisibilidad procede de la construcción de la base. G comprueba la consistencia
+de la declaración, el contrato de evaluación, la forma y el Gram; no vuelve a
+certificar la regularidad de callbacks ni aplica restricciones por añadir
+manualmente un atributo `.space`. Las fuentes, la base y la geometría deben
+permanecer fijas. `regularity_verified=False` conserva su significado de propiedad
+declarada, aunque el Gram sea correcto.
+
+`TransformedBasis` conserva el Space de su base al formar combinaciones lineales,
+porque las restricciones implementadas son homogéneas. También lo conserva la
+ortonormalización explícita de una familia obtenida con `V.restrict`. Una rotación
+ortonormal puede usarse directamente; una transformación que altere el Gram se
+rechaza hasta que el usuario normalice explícitamente su nueva base. Los autovalores
+no se copian a una transformación arbitraria.
+
+## Compatibilidad de construcción
+
+| Llamada | Entradas |
+|---|---|
+| `GalerkinField(basis=basis, weak=weak)` | Base asociada a Space y forma débil; nuevo recorrido. |
+| `problem.field(basis=basis)` | `GalerkinProblem` explícito; conserva la interfaz existente. |
+| `GalerkinField(problem, basis)` | El mismo problema general como primer argumento. |
+| `GalerkinField(problem=problem, basis=basis)` | La misma ruta general usando argumentos nombrados. |
+| `GalerkinField(legacy_basis, legacy_problem)` | `GalerkinBasis` y `Problem` de la interfaz original; conserva su orden. |
+
+La última ruta también admite ambos argumentos nombrados. `GeneralGalerkinField`
+expone la clase general y acepta tanto el nuevo recorrido como el problema general
+explícito. El nombre público `GalerkinField` sigue siendo una función que selecciona
+la construcción correspondiente.
+
+No se combinan `weak` y `problem` en una llamada, ni se proporciona una geometría
+alternativa a la ruta directa. Una base sin Space usa el problema explícito; las
+bases escalares existentes mantienen `value_shape=()` y su reconstrucción escalar.
+En ese caso `G.space` es `None`. No hay promoción silenciosa de componentes.
+
+La carga existente de una base FEM conserva sus funciones y geometría, pero no la
+declaración de Space; sigue entrando mediante un `GalerkinProblem` explícito. La
+serialización completa del espacio no se incorpora en esta etapa.
+
+## Ejemplo compatible con GalerkinProblem
+
+La construcción anterior sigue recibiendo la geometría simplicial y una forma débil completa:
 
 ```python
 import numpy as np
@@ -28,9 +146,9 @@ basis = problem.basis("laplacian", size=3, degree=1)
 G = problem.field(basis=basis)
 ```
 
-No se declara un tipo de condición de frontera. La base suministrada por el usuario
-define el espacio admisible. Las medidas de frontera sólo añaden los términos escritos
-en `weak`.
+En este ejemplo de compatibilidad no se declaran restricciones esenciales; la base
+suministrada define el espacio admisible. Las medidas de frontera sólo añaden los
+términos escritos en `weak`.
 
 La misma geometría puede reutilizarse:
 
@@ -86,7 +204,8 @@ equivale a la tupla vacía. Los tipos no implementados se rechazan explícitamen
 Una etiqueta de frontera nunca impone por sí sola una restricción.
 
 La base se construye con `V.basis(...)`, como se describe en la parte 4 a continuación.
-Para calcular el campo se sigue usando `GalerkinProblem.field`. Las bases escalares
+El campo puede construirse directamente con `GalerkinField(basis=basis, weak=weak)`
+o mediante `GalerkinProblem.field`. Las bases escalares
 existentes con `value_shape=()` conservan su comportamiento.
 
 ## Traza cero por componente — D-013, parte 3
@@ -250,8 +369,8 @@ el campo posterior puede tabular la base en otro dispositivo y precisión.
 El vínculo `.space` y los diagnósticos nuevos se conservan en el objeto en memoria.
 La serialización existente de `FiniteElementBasis` conserva los coeficientes y su
 geometría, pero todavía no reconstruye la declaración de `Space` ni estos metadatos.
-No hay cambios silenciosos de coordenadas al construir el campo. Hasta la parte 6,
-la conexión ejecutable sigue siendo:
+No hay cambios silenciosos de coordenadas al construir el campo. La conexión
+explícita siguiente permanece disponible junto a la llamada directa de la parte 6:
 
 ```python
 from ngfield import GalerkinProblem, grad, inner

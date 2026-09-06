@@ -33,6 +33,15 @@ The project follows [Semantic Versioning](https://semver.org/).
   nonhomogeneous Dirichlet through an explicit stationary lift, including physical
   initial-state projection and reconstruction.
 
+- Direct `GalerkinField(basis=basis, weak=weak, ...)` construction from a basis
+  associated with `Space`, using its geometry and labels. Exposes `G.space` and
+  `G.geometry`; validates component, mesh and subset consistency without changing
+  basis coordinates. Explicit `GalerkinProblem` and original legacy calls remain
+  supported, including keyword-based construction.
+- `TransformedBasis` preserves homogeneous Space declarations through explicit
+  linear combinations. Orthonormality is validated independently, and arbitrary
+  transformations do not inherit spectral metadata.
+
 ## [0.9.0] - 2026-09-05
 
 First public beta release.
