@@ -9,6 +9,9 @@ la versión publicada 0.9.0 conserva las llamadas de compatibilidad descritas aq
 
 ## Problema mínimo — construcción desde Space
 
+Los [cuatro ejemplos de aceptación](acceptance-examples.md) muestran este recorrido
+completo con geometría, datos físicos y comprobaciones reproducibles.
+
 El usuario prepara la geometría, declara el espacio, elige la base y proporciona
 la forma débil. Este ejemplo ejecutable construye el campo del calor con extremos
 fijos en cero; no requiere todavía una condición inicial ni tiempos:

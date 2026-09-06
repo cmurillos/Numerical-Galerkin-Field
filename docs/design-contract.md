@@ -4,10 +4,10 @@ Este documento registra decisiones estables de Numerical Galerkin Field. Una dec
 aceptada sólo cambia mediante una revisión explícita del contrato.
 
 D-001 a D-012 describen el contrato de la versión 0.9.0. D-013 registra el contrato
-de uso aprobado para la próxima evolución de la API. Sus partes 1 a 6 están
+de uso aprobado para la próxima evolución de la API. Sus partes 1 a 7 están
 implementadas en esta rama, desde `Space` y sus bases restringidas hasta la
-construcción directa de G. Las partes 7 y 8 siguen pendientes; estas ampliaciones
-todavía no pertenecen a la versión publicada 0.9.0.
+construcción directa de G y sus ejemplos de aceptación. La parte 8 sigue pendiente;
+estas ampliaciones todavía no pertenecen a la versión publicada 0.9.0.
 
 ## D-001 — Bases fijas
 
@@ -1212,7 +1212,7 @@ La implementación debe verificar al menos:
 
 ## D-013 — Contrato de uso con espacio admisible explícito
 
-**Estado:** contrato de uso aceptado; partes 1 a 6 completadas en esta rama.
+**Estado:** contrato de uso aceptado; partes 1 a 7 completadas en esta rama.
 
 ### Alcance y objetivo
 
@@ -1732,6 +1732,26 @@ La llamada `problem.field(basis=basis)` permanece disponible por compatibilidad.
 - La construcción de G no certifica por sí sola existencia global, convergencia a la
   EDP, positividad, conservación ni invariancia de una bola.
 
+### Parte 7 implementada: ejemplos de aceptación del recorrido completo
+
+La [guía de aceptación](acceptance-examples.md) forma parte de este contrato y
+documenta cuatro programas ejecutables en `examples/acceptance_*.py`. Todos
+construyen G desde geometría, Space, base y forma; después proyectan, integran y
+reconstruyen con el mismo lenguaje público, sin importar módulos internos del paquete.
+
+El toro comprueba conservación y disipación sobre la superficie triangulada. La
+lámina combina una fuente localizada, un levantamiento Dirichlet fijo y datos
+Neumann/Robin fijos con equilibrio conocido. El sistema no lineal de dos componentes
+comprueba restricciones distintas y una identidad de disipación respecto de su
+equilibrio. El intervalo periódico de media cero compara con una solución exacta
+de la EDP al refinar la malla. Las referencias discretas se distinguen de las
+referencias continuas y se indica qué error puede medir cada comparación.
+
+`tests/test_acceptance_examples.py` ejecuta los cuatro programas y sus umbrales
+numéricos como parte de la suite y del CI existentes. Los ejemplos usan CPU/float64,
+no requieren nuevos componentes de API y no convierten estas comprobaciones en
+garantías universales de convergencia, positividad o conservación.
+
 ### Trabajo por partes
 
 Cada parte se discute, implementa y verifica antes de avanzar. La documentación de
@@ -1745,10 +1765,10 @@ acuerdos y las verificaciones acompañan cada entrega.
 | 4 | Familias sobre el espacio restringido y ortonormalización. | Implementada: `V.basis`, tamaño total, espectro restringido y L2. |
 | 5 | Periodicidad, media cero y sus combinaciones. | Implementada: restricciones nodales y recetas verificadas de fronteras fijas. |
 | 6 | Construcción unificada de G y compatibilidad con la interfaz actual. | Implementada: entrada directa, consistencia y compatibilidad. |
-| 7 | Ejemplos de aceptación del recorrido completo. | Pendiente. |
+| 7 | Ejemplos de aceptación del recorrido completo. | Implementada: cuatro programas verificables y su guía matemática. |
 | 8 | Revisión conjunta de documentación y guía de migración. | Pendiente. |
 
-Los ejemplos de aceptación serán calor en un toro triangulado, una lámina con
+Los ejemplos de aceptación son calor en un toro triangulado, una lámina con
 condiciones mixtas y fuente localizada, dos componentes con fronteras diferentes y
 difusión periódica con media cero. Todos emplearán geometría y datos del operador
 independientes del tiempo. La parte 7 reúne las comprobaciones del recorrido; no
