@@ -1,9 +1,9 @@
 # Interfaz general de Numerical Galerkin Field
 
-Esta guía conserva el recorrido de 0.9.0 y documenta el descriptor `Space` añadido
+Esta guía conserva el recorrido de 0.9.0 y documenta `Space` y `ZeroTrace` añadidos
 en esta rama. El
 [contrato D-013](design-contract.md#d-013--contrato-de-uso-con-espacio-admisible-explícito)
-registra el recorrido futuro completo. `ZeroTrace`, `V.basis` y la nueva construcción
+registra el recorrido futuro completo. `V.basis` y la nueva construcción
 directa de `GalerkinField` todavía no están implementados.
 
 ## Problema mínimo
@@ -76,19 +76,72 @@ construye ni certifica una base conforme de ese orden. El número de modos se de
 después, al elegir la base, y no es una propiedad de este descriptor.
 
 `Space` conserva la geometría por referencia y no altera sus regiones, medidas ni
-fronteras. Sus atributos no se reasignan y la lista vacía de restricciones se copia
+fronteras. Sus atributos no se reasignan y la lista de restricciones se copia
 como tupla. La geometría compartida debe mantenerse fija, igual que al construir una
 base o un campo.
 
-Las listas o tuplas de restricciones no vacías se rechazan explícitamente: su implementación
-pertenece a la parte 3. Sólo se admite `restrictions=[]` o `restrictions=()`; omitir el
-argumento equivale a la tupla vacía. Una etiqueta de frontera nunca impone por sí sola
-una restricción.
+`restrictions` admite una lista o tupla de objetos `ZeroTrace`; omitir el argumento
+equivale a la tupla vacía. Los tipos no implementados se rechazan explícitamente.
+Una etiqueta de frontera nunca impone por sí sola una restricción.
 
 Esta entrega proporciona la descripción del espacio. Para calcular un campo se sigue
 usando `GalerkinProblem` y una base explícitamente admisible; `V.basis` y su conexión
 directa con `GalerkinField` llegarán en las partes siguientes. Las bases escalares
 existentes con `value_shape=()` conservan su comportamiento.
+
+## Traza cero por componente — D-013, parte 3
+
+Sobre una geometría que incluya la etiqueta de frontera `"fixed"`:
+
+```python
+from ngfield import ComponentBasis, FiniteElementBasis, Space, ZeroTrace
+
+V = Space(
+    geometry=geometry,
+    components=1,
+    regularity=1,
+    restrictions=[ZeroTrace(component=0, boundary="fixed")],
+)
+raw = ComponentBasis(FiniteElementBasis(geometry, degree=2), components=V.components)
+admissible = V.restrict(raw)
+```
+
+`admissible` representa todas las combinaciones de la familia candidata cuya
+componente cero se anula en esa frontera, hasta la tolerancia algebraica de la
+construcción. Se imponen todos los grados de libertad de las caras, incluidos los
+nodos interiores en grado alto. La traza polinómica completa queda determinada por
+esos valores; no se comprueba solamente en los vértices.
+
+Se admiten bases nodales `FiniteElementBasis` y sus composiciones con `ComponentBasis`,
+`ProductBasis` y `TransformedBasis`, incluidos modos acoplados. La familia candidata
+debe tener forma de valor `(V.components,)` y la misma malla que `V.geometry`.
+Varias restricciones pueden dirigirse a componentes diferentes; las declaraciones
+idénticas y las caras superpuestas no duplican las condiciones independientes.
+
+La familia devuelta todavía debe ortonormalizarse para construir el campo:
+
+```python
+problem = GalerkinProblem(geometry=geometry, weak=weak)
+basis = problem.orthonormalize(admissible)
+G = problem.field(basis=basis)
+```
+
+Las restricciones no alteran los términos de `weak`: Robin y Neumann se siguen
+escribiendo mediante las medidas de frontera. `V.restrict` tampoco selecciona los
+modos laplacianos; esa integración corresponde a la parte 4.
+
+El cálculo del núcleo usa SVD y permite `tolerance=1e-12` y
+`max_matrix_entries=10_000_000` como valores predeterminados. El segundo limita la
+preparación algebraica densa. El resultado registra `restriction_rank` y un residual
+normalizado `restriction_error`, y conserva `space=V`. No modifica la base de entrada;
+con restricciones vacías devuelve la familia admitida sin cambios.
+
+Se rechazan etiquetas inexistentes o vacías, componentes fuera de rango, traza sobre
+un espacio declarado sólo L2, familias dependientes, un subespacio resultante nulo y
+bases programables sin representación nodal verificable. Esta operación admite
+conformidad H1 y rechaza órdenes mayores; declarar H2 no convierte elementos Lagrange
+continuos en elementos conformes H2. Para un toro cerrado se dejan vacías las
+restricciones de frontera.
 
 ## Geometría simplicial
 

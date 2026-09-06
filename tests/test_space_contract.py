@@ -64,7 +64,7 @@ def test_description_is_frozen_and_does_not_retain_a_mutable_restrictions_list()
 
 @pytest.mark.parametrize("restrictions", [["fixed"], (object(),)])
 def test_unimplemented_restrictions_are_never_silently_accepted(restrictions):
-    with pytest.raises(NotImplementedError, match="Restriction construction"):
+    with pytest.raises(TypeError, match="Only ZeroTrace"):
         Space(geometry=labelled_triangle(), components=1, restrictions=restrictions)
 
 

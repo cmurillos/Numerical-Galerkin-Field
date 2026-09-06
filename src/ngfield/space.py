@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 
 from .geometry import SimplicialDomain, positive_integer
+from .restrictions import ZeroTrace, restrict_basis
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -19,9 +20,10 @@ class Space:
     reference; do not mutate that geometry. The ambient state inner product is
     L2 with its induced measure, summed over components.
 
-    In D-013 part 2, only empty restrictions are supported. Nonempty restrictions
-    are rejected rather than ignored. Restriction construction, basis selection
-    and direct field construction belong to subsequent parts of the contract.
+    D-013 part 3 supports ZeroTrace restrictions on named exterior boundaries.
+    ``restrict`` constructs their nodal kernel before basis selection and L2
+    orthonormalization. Basis selection and direct field construction belong to
+    subsequent parts of the contract.
     """
 
     geometry: SimplicialDomain
@@ -36,14 +38,26 @@ class Space:
         object.__setattr__(self, "regularity", positive_integer(self.regularity, "regularity", 0))
         if not isinstance(self.restrictions, (list, tuple)):
             raise TypeError("restrictions must be a list or tuple.")
-        if self.restrictions:
-            raise NotImplementedError(
-                "Restriction construction is not implemented yet. "
-                "The existing API accepts an explicitly admissible basis."
-            )
-        object.__setattr__(self, "restrictions", ())
+        for restriction in self.restrictions:
+            if type(restriction) is not ZeroTrace:
+                raise TypeError("Only ZeroTrace restrictions are implemented in this stage.")
+            restriction._validate(self)
+        object.__setattr__(self, "restrictions", tuple(dict.fromkeys(self.restrictions)))
 
     @property
     def value_shape(self) -> tuple[int, ...]:
         """Physical value shape; this is not the reduced coordinate dimension."""
         return (self.components,)
+
+    def restrict(self, basis, *, tolerance=1e-12, max_matrix_entries=10_000_000):
+        """Return the candidate span satisfying the declared nodal trace constraints.
+
+        The candidate must have value_shape=(components,). Built-in nodal FEM
+        bases and their component/product/linear combinations are supported.
+        The result is not L2-orthonormalized and no number of modes is selected.
+        ``tolerance`` controls numerical rank after candidate-column scaling;
+        ``max_matrix_entries`` bounds dense algebraic preparation.
+        """
+        return restrict_basis(
+            self, basis, tolerance=tolerance, max_matrix_entries=max_matrix_entries
+        )
