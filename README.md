@@ -182,6 +182,13 @@ graph.
 
 The [usage guide](docs/usage.md) documents validation, memory limits and persistence.
 
+## Working with coding agents
+
+The root [`AGENTS.md`](AGENTS.md) gives coding agents a complete operational guide to the
+mathematical contracts, public API, repository boundaries, validation workflow and current
+non-goals. Start the agent from the repository root so it discovers these instructions before
+writing examples or changing the library.
+
 ## Development
 
 ```bash

@@ -8,6 +8,8 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ### Documentation
 
+- Add a root `AGENTS.md` with repository-specific mathematical, API, testing and
+  cross-package instructions for coding agents, and link it from the README.
 - Make the Space-to-field workflow the main README and usage path, with explicit
   scalar components, total mode counts and compatible existing constructors.
 - Add a migration guide with executable physical-equivalence, coordinate-transfer
