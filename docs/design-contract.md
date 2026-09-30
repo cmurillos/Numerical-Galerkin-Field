@@ -1831,3 +1831,21 @@ Se diferencian las coordenadas de estado, nunca la variable espacial de
 débil debe admitir las derivadas pedidas. Las tablas geométricas y la base
 permanecen fijas. El número de términos crece como `binomial(N+k,k)`, lo cual
 limita en la práctica las elecciones de `N` y `k`.
+
+## D-015 — Pesos de integración y refinamiento compartido
+
+**Estado:** aceptada para evaluación de campos reducidos.
+
+`G.integral_weights()` devuelve los pesos `m_i = integral_Omega phi_i` para
+cada componente físico, usando la tabla de volumen preparada del campo. Su
+forma es `[N,*value_shape]`, que también cubre bases escalares anteriores con
+`value_shape=()`. Así, el integral por componente de `Phi(z)` es la contracción
+de `z` con estos pesos. El resultado es una aproximación por cuadratura del
+observable físico; no implica que ese integral sea invariante bajo la forma
+débil, ni incluye un posible levantamiento afín fijo. La operación no prepara
+otra tabla ni modifica los datos del campo.
+
+`ngfield.time_error(field, ...)` expone el indicador genérico de D-012 para
+campos compatibles con el integrador compartido, incluidos los neuronales.
+El método `G.time_error(...)` sigue proporcionando exactamente el mismo
+indicador y ninguna de las dos rutas es una cota certificada.

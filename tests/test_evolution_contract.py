@@ -3,7 +3,7 @@ import math
 import pytest
 import torch
 
-from ngfield import GalerkinProblem
+from ngfield import GalerkinProblem, time_error
 
 
 def decay_field(dtype=torch.float64):
@@ -25,6 +25,15 @@ def test_fixed_taylor_solves_batched_decay_at_nonuniform_output_times():
 
     assert states.shape == (len(times), *z0.shape)
     torch.testing.assert_close(states, expected, atol=2e-10, rtol=2e-10)
+
+
+def test_public_temporal_indicator_reuses_the_field_method():
+    field = decay_field()
+    z0 = torch.tensor([0.2, 0.4, -0.1], dtype=field.dtype)
+    times = torch.tensor([0.0, 0.2, 0.4], dtype=field.dtype)
+    torch.testing.assert_close(
+        time_error(field, z0, times, step=0.1), field.time_error(z0, times, step=0.1)
+    )
 
 
 def test_adaptive_taylor_is_the_default_and_supports_backward_time():

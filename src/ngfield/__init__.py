@@ -2,7 +2,7 @@
 
 from .basis import GalerkinBasis
 from .domain import Domain
-from .evolution import DomainExitError, integrate_field
+from .evolution import DomainExitError, integrate_field, time_error
 from .fem import FEMSpace
 from .field import GalerkinField as LegacyGalerkinField
 from .forms import (
@@ -87,6 +87,7 @@ __all__ = [
     "state_derivatives",
     "sym_grad",
     "tanh",
+    "time_error",
     "trace",
     "transpose",
 ]

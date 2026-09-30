@@ -100,11 +100,13 @@ the final coordinate axis of `G`.
 | `G.solve(z0, times, step=h, order=p)` | Integrate with a fixed maximum Taylor step. |
 | `G.solve(z0, times, radius=R)` | Stop at the boundary of the open coordinate ball. |
 | `G.state_derivatives(z, k)` | Evaluate all indexed state derivatives through order `k`. |
+| `G.integral_weights()` | Integrate each fixed basis function by physical component. |
 | `G.reconstruct(z, points)` | Evaluate the reconstructed field at physical points. |
 | `G.grad(z, points)` | Evaluate elementwise tangential gradients. |
 | `G.hessian(z, points)` | Evaluate elementwise tangential Hessians. |
 | `G.projection_error(u)` | Estimate the spatial `L2` projection error. |
 | `G.time_error(...)` | Compare temporally refined trajectories. |
+| `ngfield.time_error(field, ...)` | Apply that same refinement indicator to another compatible field. |
 | `G.quadrature_error(z)` | Compare fields assembled with refined quadrature. |
 
 `GalerkinProblem` and the original `Problem`/`GalerkinBasis` interface remain

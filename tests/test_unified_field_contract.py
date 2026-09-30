@@ -75,6 +75,33 @@ def nonlinear_constants():
     return GalerkinField(basis=basis, weak=weak)
 
 
+def test_integral_weights_match_physical_component_integrals_without_conservation_claim():
+    G = nonlinear_constants()
+    weights = G.integral_weights()
+    assert weights.shape == (G.dimension, 2)
+    for component in range(2):
+        unit = torch.zeros(2, dtype=G.dtype)
+        unit[component] = 1
+        projected = G.project(lambda x, unit=unit: unit.expand(len(x), -1))
+        torch.testing.assert_close(weights[:, component], projected)
+    state = torch.tensor([0.25, -0.4], dtype=G.dtype)
+    integral = state @ weights
+    q = G.geometry.quadrature(10)
+    values = G.reconstruct(state, torch.tensor(q.points.copy(), dtype=G.dtype))
+    expected = (values * torch.tensor(q.weights.copy(), dtype=G.dtype)[:, None]).sum(dim=0)
+    torch.testing.assert_close(integral, expected, atol=1e-12, rtol=1e-12)
+
+    G.to(dtype=torch.float32)
+    assert G.integral_weights().dtype == torch.float32
+    assert G.integral_weights().device == G.device
+
+    scalar_problem = GalerkinProblem(
+        vertices=[[0.0], [1.0]], simplices=[[0, 1]], weak=lambda u, v, dx, ds: -u * v * dx
+    )
+    scalar = scalar_problem.field(basis=scalar_problem.basis("polynomial", size=1))
+    assert scalar.integral_weights().shape == (1,)
+
+
 def exact_reaction(z):
     a, b = z[..., 0], z[..., 1]
     return torch.stack((a - a**3 + 2 * b, a - 3 * b), dim=-1)

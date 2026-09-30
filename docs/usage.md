@@ -893,6 +893,22 @@ certificadas. La base ortonormal hace que las diferencias de coordenadas usadas 
 `time_error` y `quadrature_error` coincidan con diferencias `L2` entre las funciones
 reconstruidas. El campo original nunca se modifica.
 
+Para un observable lineal dado por el integral de cada componente reconstruida,
+los pesos se obtienen una vez de la cuadratura ya preparada:
+
+```python
+weights = G.integral_weights()  # [N,*value_shape]
+integrals = torch.tensordot(Z, weights, dims=([-1], [0]))
+integral_rates = torch.tensordot(G(Z), weights, dims=([-1], [0]))
+```
+
+Para un problema escalar moderno la salida tiene un eje final de longitud uno;
+para una base escalar anterior puede no tenerlo. El integral es un observable,
+no una declaración de conservación. Un levantamiento fijo del estado físico
+debe añadirse explícitamente cuando se interpreta el valor del integral.
+`ngfield.time_error(otro_campo, z0, times, ...)` aplica el mismo indicador
+temporal a cualquier campo reducido compatible con el integrador compartido.
+
 ## Precisión, memoria y dispositivo
 
 ```python

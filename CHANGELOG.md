@@ -6,6 +6,10 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+- Expose prepared basis integral weights per physical component as a linear
+  observable, without asserting mass conservation; expose the shared temporal
+  refinement indicator for other compatible reduced fields.
+
 ### Indexed Sobolev and Taylor interface
 
 - Add exact multi-index enumeration and directional automatic differentiation of

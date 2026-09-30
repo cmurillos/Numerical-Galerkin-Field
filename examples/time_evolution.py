@@ -28,11 +28,15 @@ def main():
     states = field.solve(z0, times)
     points = torch.tensor([[0.25], [0.75]], dtype=field.dtype, device=field.device)
     values = field.reconstruct(states, points)
+    weights = field.integral_weights()
+    integrals = states @ weights
+    integral_rates = field(states) @ weights
 
     diagnostics = {
         "projection_error": field.projection_error(initial, quadrature=16).item(),
         "time_error": field.time_error(z0, times, step=0.05)[-1].item(),
         "quadrature_error": field.quadrature_error(states, order=10).max().item(),
+        "linear_integral_balance": torch.max(torch.abs(integral_rates + integrals)).item(),
     }
     if not torch.isfinite(values).all() or not all(value >= 0 for value in diagnostics.values()):
         raise RuntimeError("The evolution example produced invalid numerical values.")

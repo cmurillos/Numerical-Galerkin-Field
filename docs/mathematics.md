@@ -338,6 +338,13 @@ factores geométricos físicos.
 
 ## Alcance numérico
 
+Los pesos de integración de la base, `m_i=integral_Omega phi_i`, definen un
+observable lineal por componente `M(z)=sum_i z_i m_i`. A lo largo de una
+trayectoria diferenciable de `dot z=G(z)`, su tasa es
+`dot M(z)=sum_i G_i(z)m_i`. NGF calcula `m_i` mediante su cuadratura preparada;
+la identidad de la tasa no presupone que `dot M` se anule. Con un levantamiento
+fijo `ell`, el integral físico suma además `integral_Omega ell`.
+
 No hay un límite lógico de dimensión codificado en la geometría, las funciones
 polinómicas o la cuadratura. Permanecen límites computacionales: crecimiento del número
 de simplejos, grados de libertad, modos y puntos de integración.

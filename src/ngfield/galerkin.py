@@ -1101,6 +1101,14 @@ class GalerkinField:
 
         return state_derivatives(self, z, order)
 
+    def integral_weights(self):
+        """Return ``int_Omega phi_i`` per physical component, shape ``[N,*value_shape]``.
+
+        The integral uses the field's prepared volume quadrature. It describes
+        a linear observable of the reconstructed state, not a conservation law.
+        """
+        return torch.tensordot(self._volume.weights, self._volume.basis[0], dims=([0], [0]))
+
     def solve(self, z0, times, *, step=None, tolerance=None, order=4, radius=None):
         """Solve the autonomous Galerkin ODE at the requested times."""
         from .evolution import solve
