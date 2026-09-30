@@ -176,14 +176,21 @@ def integrate_field(field, z0, times, *, step=None, tolerance=None, order=4, rad
     used_steps = 0
     for start, stop in zip(host_times[:-1], host_times[1:]):
         budget = _MAX_INTERNAL_STEPS - used_steps
-        if fixed_step is None:
-            state, count = _adaptive_interval(
-                field, state, start, stop, adaptive_tolerance, order, radius, budget
-            )
-        else:
-            state, count = _fixed_interval(
-                field, state, start, stop, fixed_step, order, radius, budget
-            )
+        try:
+            if fixed_step is None:
+                state, count = _adaptive_interval(
+                    field, state, start, stop, adaptive_tolerance, order, radius, budget
+                )
+            else:
+                state, count = _fixed_interval(
+                    field, state, start, stop, fixed_step, order, radius, budget
+                )
+        except DomainExitError as error:
+            # Keep the existing exception API, and make the already completed
+            # requested outputs available to function-valued workflows.
+            error.completed_times = times[: len(states)].detach().clone()
+            error.completed_states = torch.stack(states, dim=0)
+            raise
         used_steps += count
         states.append(state)
     return torch.stack(states, dim=0)

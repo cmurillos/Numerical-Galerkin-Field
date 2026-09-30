@@ -1849,3 +1849,39 @@ otra tabla ni modifica los datos del campo.
 campos compatibles con el integrador compartido, incluidos los neuronales.
 El método `G.time_error(...)` sigue proporcionando exactamente el mismo
 indicador y ninguna de las dos rutas es una cota certificada.
+
+## D-016 — Recorrido funcional y derivadas indexadas
+
+**Estado:** aceptada para la API de código fuente.
+
+`Geometry` es un alias de `SimplicialDomain`. Para una base operacional fija
+`basis = Space(...).basis(...)`, `System(basis=basis, weak=weak, ...)` encapsula
+el campo de Galerkin. `system.state(u0)` proyecta una función física; la entrada
+explícita `system.from_coefficients(a)` acepta un tensor `[...,N]` del mismo
+tipo y dispositivo. Un `State` es un punto de fase; `Function` representa
+cualquier elemento de `V_N`. Ambos dan `values`, `gradient`, `hessian`,
+`norm_L2`, `integral` y `coefficients`. `gradient` y `hessian` son espaciales
+y elemento a elemento. `State.velocity()` devuelve un `Function`.
+
+`State.indexed_derivatives(k)` y `system.indexed_derivatives(state,k)`
+devuelven `alpha -> Function` con coeficientes `partial_a^alpha G(a)` para
+`|alpha|<=k`, incluida la clave cero. Las derivadas son respecto de las
+coordenadas físicas `a` en la base fija, sin normalización por radio. Una
+derivada puede tener norma mayor que el radio: es un elemento tangente, no
+un nuevo punto de fase. El orden temporal de Taylor permanece independiente
+de este `k`.
+
+`system.evolve(initial,times,order,step|tolerance,radius)` conserva el mismo
+integrador de D-011. `solution.at(t)` sólo acepta un tiempo de salida registrado
+y devuelve `State`; no interpola. Si se alcanza la bola abierta, la solución
+conserva únicamente las salidas ya completadas y `exit_status()` devuelve
+el último tiempo y estado interiores aceptados. Son datos numéricos y no una
+certificación del instante exacto de salida. `solution.coefficients()` devuelve
+`[T,*S,N]` como vía explícita de interoperabilidad.
+
+`system.metrics` agrupa indicadores de proyección, cuadratura y refinamiento
+temporal, la tasa del integral, `radial_rate(a)=<a,G(a)>` y el máximo de
+`||DG(a)||_2` sobre estados suministrados. La última cifra es muestral y
+no una cota Lipschitz global. La norma `Function.norm_L2()` usa la isometría
+operacional; los integrales y sus tasas usan la cuadratura preparada. Ningún
+observable genérico declara conservación o invariancia de la bola.

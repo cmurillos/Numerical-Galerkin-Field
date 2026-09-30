@@ -20,6 +20,48 @@ incluso una ecuación escalar conserva el eje de componente `(1,)`.
 La forma débil recibe expresiones físicas: `u[r]` selecciona la componente r.
 Los ejes de lote, cuadratura y modo de prueba los gestiona el paquete.
 
+## Recorrido funcional
+
+Sobre la misma base y la misma forma débil, la API opcional `System` presenta
+el semigrupo numérico como evolución de funciones. Las coordenadas se conservan
+como representación interna y pueden pedirse explícitamente. El fragmento
+supone `basis`, `weak`, `u0`, `times` y `points` preparados como se muestra en
+las secciones siguientes:
+
+```python
+from ngfield import System
+
+system = System(basis=basis, weak=weak)
+u0_N = system.state(u0)
+path = system.evolve(u0_N, times, order=4, step=0.01)
+u_t = path.at(times[-1])
+values = u_t.values(points)
+gradient = u_t.gradient(points)
+hessian = u_t.hessian(points)
+norm = u_t.norm_L2()
+integral = u_t.integral()
+rate = u_t.velocity()
+by_index = u_t.indexed_derivatives(2)
+```
+
+Aquí `by_index[alpha]` es la función de `V_N` cuyos coeficientes son
+`∂_a^alpha G(a)` en el punto de fase `a=u_t.coefficients()`. Incluso la
+derivada de orden cero es la velocidad. Este `alpha` indexa derivadas respecto
+de las coordenadas, mientras que `gradient` y `hessian` diferencian en el
+espacio físico, elemento a elemento. `State` es un punto de fase, y la
+velocidad y sus derivadas son objetos `Function`, aun si sus coeficientes no
+pertenecen a la bola de evolución. `path.at(t)` requiere un tiempo de salida
+registrado; para otro `t`, se integra de nuevo con el tiempo pedido.
+
+`system.metrics` agrupa `projection`, `quadrature`, `time_refinement`,
+`integral_rate`, `radial_rate` y `sampled_lipschitz`. Los tres primeros son
+indicadores numéricos absolutos; el último es sólo una máxima muestral.
+`path.exit_status()` indica salida numérica y el último estado interior
+aceptado si se impone `radius=R`. `System.from_coefficients(z)` y
+`path.coefficients()` dejan disponible el recorrido tensorial cuando se
+necesita. La base sigue siendo L² ortonormal y el orden temporal de Taylor
+es independiente del orden de derivación indexada.
+
 
 ## Problema mínimo — construcción desde Space
 

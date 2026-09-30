@@ -298,6 +298,12 @@ generic `ngfield.state_derivatives(f,z,k)`. Keys are all multi-indices of total
 degree at most `k`, with each mixed partial included once. This operation is
 about state coordinates and never implies spatial `H2` conformity.
 
+The optional D-016 function-valued route is `System(basis,weak).state(u0)`
+followed by `system.evolve(initial,times)`. `State.velocity()` and
+`State.indexed_derivatives(k)` reconstruct functions in the fixed basis;
+the latter differentiates the reduced field with respect to state coordinates.
+`Function.gradient/hessian` remain spatial, elementwise operations.
+
 ## Time integration and numerical indicators
 
 `G.solve(z0, times, order=p)` uses adaptive Taylor jets (default `p=4`).
@@ -350,6 +356,7 @@ every affected route.
   projection, spatial evaluation, diagnostics, and public coordinate behavior.
 - `src/ngfield/evolution.py`: shared Taylor integration and temporal refinement indicator.
 - `src/ngfield/state_derivatives.py`: multi-indices and state-coordinate derivatives.
+- `src/ngfield/workflow.py`: function-valued System, State, Solution and grouped metrics.
 - `src/ngfield/basis.py`, `domain.py`, `fem.py`, `field.py`, `problem.py`, `io.py`: original
   API and compatibility machinery; do not delete as dead code.
 - `src/ngfield/__init__.py`: public exports and `GalerkinField` dispatch.

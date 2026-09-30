@@ -6,6 +6,10 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+- Add the function-valued `System`/`State`/`Function`/`Solution` workflow,
+  indexed coordinate derivatives reconstructed as functions, grouped numerical
+  metrics and partial output paths on numerical open-ball exit. Keep the
+  coordinate field API for explicit interoperability.
 - Expose prepared basis integral weights per physical component as a linear
   observable, without asserting mass conservation; expose the shared temporal
   refinement indicator for other compatible reduced fields.

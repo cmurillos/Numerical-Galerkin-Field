@@ -85,6 +85,39 @@ Here `Z` has shape `[time,8]` and `U` has shape `[time,point,1]`. The physical c
 axis remains explicit even for a scalar problem. Arbitrary batch axes may precede
 the final coordinate axis of `G`.
 
+## Function-valued workflow
+
+The same fixed basis and weak form also support a function-first interface:
+
+```python
+from ngfield import System
+
+system = System(basis=basis, weak=weak)
+initial = system.state(u0)
+solution = system.evolve(initial, times, order=4)
+u_t = solution.at(times[-1])
+values = u_t.values(points)
+spatial_gradients = u_t.gradient(points)
+velocity = u_t.velocity()  # another function in the operational space
+indexed = u_t.indexed_derivatives(2)  # alpha -> function representing ∂_a^alpha G(a)
+```
+
+`solution.at(t)` requires a recorded output time. `System.from_coefficients(z)`
+and `Function.coefficients()` provide an explicit coordinate path. `Function` also
+provides `hessian(points)`, `norm_L2()` and `integral()`; a Hessian is elementwise
+and does not imply global H² conformity. `State.velocity()` and indexed state
+derivatives are functions, not new phase points. `Geometry` aliases
+`SimplicialDomain`, and `Space`, the restrictions, basis factories and weak-form
+language remain the same in both workflows.
+
+`system.metrics` offers `projection(u0)`, `quadrature(u_t)`,
+`time_refinement(initial,times,...)`, `integral_rate(u_t)`,
+`radial_rate(u_t)` and `sampled_lipschitz(states_test)`. The last result is a
+maximum over supplied points, not a global bound. `solution.exit_status()`
+reports a numerical last accepted interior state if `radius=R` stops the local
+trajectory; its `last_accepted_time` is not an exact exit time.
+See the executable [function-valued example](examples/functional_workflow.py).
+
 ## Core interface
 
 | Operation | Purpose |

@@ -42,6 +42,9 @@ from .spaces import (
     TransformedBasis,
 )
 from .state_derivatives import multi_indices, state_derivatives
+from .workflow import Function, Metrics, Solution, State, System
+
+Geometry = SimplicialDomain
 
 __version__ = "0.9.0"
 __all__ = [
@@ -53,11 +56,14 @@ __all__ = [
     "DomainExitError",
     "FEMSpace",
     "FiniteElementBasis",
+    "Function",
     "GalerkinBasis",
     "GalerkinField",
     "GeneralGalerkinField",
+    "Geometry",
     "GalerkinProblem",
     "MeanZero",
+    "Metrics",
     "Periodic",
     "PolynomialBasis",
     "ProductBasis",
@@ -65,6 +71,9 @@ __all__ = [
     "LegacyGalerkinField",
     "SimplicialDomain",
     "Space",
+    "Solution",
+    "State",
+    "System",
     "TransformedBasis",
     "ZeroTrace",
     "contract",
