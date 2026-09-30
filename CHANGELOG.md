@@ -6,6 +6,14 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Indexed Sobolev and Taylor interface
+
+- Add exact multi-index enumeration and directional automatic differentiation of
+  numerical Galerkin fields, with every mixed state derivative counted once.
+- Replace the source-tree RK solvers with one Taylor-jet engine shared with the
+  neural package. Support fixed and adaptive steps, independent Taylor order,
+  optional open-ball exit detection, and matching temporal refinement indicators.
+
 ### Documentation
 
 - Add a root `AGENTS.md` with repository-specific mathematical, API, testing and

@@ -96,8 +96,10 @@ the final coordinate axis of `G`.
 | `G.space`, `G.geometry`, `G.basis` | Inspect the associated objects. |
 | `G(z)` | Evaluate `G: [...,N] -> [...,N]`. |
 | `G.project(u)` | Project a physical function onto the fixed basis. |
-| `G.solve(z0, times)` | Integrate with adaptive Dormand--Prince RK45. |
-| `G.solve(z0, times, step=h)` | Integrate with fixed-step RK4. |
+| `G.solve(z0, times, order=p)` | Integrate with adaptive Taylor jets, default `p=4`. |
+| `G.solve(z0, times, step=h, order=p)` | Integrate with a fixed maximum Taylor step. |
+| `G.solve(z0, times, radius=R)` | Stop at the boundary of the open coordinate ball. |
+| `G.state_derivatives(z, k)` | Evaluate all indexed state derivatives through order `k`. |
 | `G.reconstruct(z, points)` | Evaluate the reconstructed field at physical points. |
 | `G.grad(z, points)` | Evaluate elementwise tangential gradients. |
 | `G.hessian(z, points)` | Evaluate elementwise tangential Hessians. |
@@ -144,9 +146,8 @@ The field preserves PyTorch automatic differentiation. Continuing the quick star
 
 ```python
 z = z0
-w = torch.ones_like(z)
-J = torch.func.jacrev(G)(z)
-_, Jw = torch.func.jvp(G, (z,), (w,))
+derivatives = G.state_derivatives(z, order=2)
+first_coordinate = derivatives[(1,) + (0,) * (G.dimension - 1)]
 ```
 
 The geometry, basis and fixed spatial coefficients remain outside the differentiation
@@ -176,7 +177,7 @@ graph.
   remain available through an explicit `GalerkinProblem`.
 - Discontinuous data are currently projected into a continuous fixed space in `L2`.
   Interior-facet DG operators are not yet implemented.
-- RK4 and RK45 are explicit. Stiff diffusive systems may require small steps; implicit
+- Taylor integration is explicit. Stiff diffusive systems may require small steps; implicit
   and IMEX integrators remain a future extension.
 - The error methods are refinement indicators, not certified a posteriori bounds.
 

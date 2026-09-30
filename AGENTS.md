@@ -293,12 +293,21 @@ elementwise and tangential on embedded meshes.
 coefficients are intentionally outside that graph. Avoid in-place state operations, Python
 data-dependent branching on differentiable values, and callbacks with side effects.
 
+For the Sobolev coordinate objective, call `G.state_derivatives(z, k)` or the
+generic `ngfield.state_derivatives(f,z,k)`. Keys are all multi-indices of total
+degree at most `k`, with each mixed partial included once. This operation is
+about state coordinates and never implies spatial `H2` conformity.
+
 ## Time integration and numerical indicators
 
-`G.solve(z0, times)` uses adaptive Dormand--Prince 5(4). `G.solve(..., step=h)` uses fixed
-classical RK4, where `h` is a maximum internal step and output states occur exactly at
-`times`. `step` and `tolerance` select different solvers and cannot be combined. Times may be
-strictly increasing or strictly decreasing and must match the field's dtype/device.
+`G.solve(z0, times, order=p)` uses adaptive Taylor jets (default `p=4`).
+`G.solve(..., step=h, order=p)` uses a fixed maximum Taylor step. `step` and
+`tolerance` cannot be combined. Times may increase or decrease and match the
+field's dtype/device. `ngfield.integrate_field` is the same engine used by the
+downstream neural package: use the same order and time controls for comparisons.
+The optional `radius=R` stops trajectories at the open-ball boundary with
+`DomainExitError`, including the last accepted interior state/time. The numerical
+exit time is approximate; no exterior field evaluation occurs.
 
 Both methods are explicit. Do not describe them as suitable for stiff diffusion merely
 because they return a result. If a run is unstable or expensive, expose the stiffness/time
@@ -339,7 +348,8 @@ every affected route.
 - `src/ngfield/forms.py`: symbolic weak-expression language and numerical evaluation.
 - `src/ngfield/galerkin.py`: modern/general field construction, fixed tables, field calls,
   projection, spatial evaluation, diagnostics, and public coordinate behavior.
-- `src/ngfield/evolution.py`: RK4/RK45 integration and temporal refinement indicator.
+- `src/ngfield/evolution.py`: shared Taylor integration and temporal refinement indicator.
+- `src/ngfield/state_derivatives.py`: multi-indices and state-coordinate derivatives.
 - `src/ngfield/basis.py`, `domain.py`, `fem.py`, `field.py`, `problem.py`, `io.py`: original
   API and compatibility machinery; do not delete as dead code.
 - `src/ngfield/__init__.py`: public exports and `GalerkinField` dispatch.

@@ -724,19 +724,19 @@ import torch
 z0 = G.project(u0)
 times = torch.linspace(0, 1, 101, dtype=G.dtype, device=G.device)
 
-Z = G.solve(z0, times)  # RK45 adaptativo
+Z = G.solve(z0, times)  # Taylor de orden 4, paso adaptativo
 U = G.reconstruct(Z, points)
 ```
 
 `Z` tiene forma `[T,*S,N]` cuando `z0` tiene forma `[*S,N]`. Los tiempos sólo indican
-dónde se devuelve la solución; RK45 elige sus propios pasos internos. La tolerancia
+dónde se devuelve la solución; el integrador elige sus propios pasos internos. La tolerancia
 puede fijarse explícitamente:
 
 ```python
 Z = G.solve(z0, times, tolerance=1e-7)
 ```
 
-Para RK4 fijo se entrega el máximo paso interno:
+Para Taylor con paso fijo se entrega el máximo paso interno:
 
 ```python
 Z = G.solve(z0, times, step=1e-3)
@@ -744,7 +744,7 @@ Z = G.solve(z0, times, step=1e-3)
 
 Cada intervalo de `times` se subdivide cuando es necesario, de modo que también se
 admiten tiempos de salida no uniformes. `step` y `tolerance` no se combinan. Ambos
-métodos son explícitos; una difusión rígida puede requerir un paso muy pequeño.
+modos son explícitos; una difusión rígida puede requerir un paso muy pequeño.
 
 ## Aproximación continua de una discontinuidad
 
@@ -854,9 +854,9 @@ z = z.to(device=G.device, dtype=G.dtype)
 El campo funciona directamente con las transformaciones de PyTorch:
 
 ```python
-J = torch.func.jacrev(G)(z)
-_, Jw = torch.func.jvp(G, (z,), (w,))
-value, pullback = torch.func.vjp(G, z)
+derivatives = G.state_derivatives(z, order=2)
+value = derivatives[(0,) * G.dimension]
+partial_first = derivatives[(1,) + (0,) * (G.dimension - 1)]
 ```
 
 Las funciones usadas en `pointwise` deben estar escritas con operaciones PyTorch
@@ -878,8 +878,8 @@ quadrature = G.quadrature_error(Z)
 cuadratura que `project`. Para verificar convergencia espacial se repite la llamada con
 bases de mayor tamaño o con mallas sucesivamente refinadas.
 
-`time` compara RK4 con pasos `h` y `h/2`. Si se entrega `tolerance` en lugar de `step`,
-compara dos ejecuciones RK45 con tolerancias `tol` y `tol/2`. Su forma es `[T,*S]`.
+`time` compara Taylor con pasos `h` y `h/2`. Si se entrega `tolerance` en lugar de `step`,
+compara dos ejecuciones adaptativas con tolerancias `tol` y `tol/2`. Su forma es `[T,*S]`.
 
 `quadrature` compara `G(Z)` con el campo ensamblado temporalmente a orden `q+2`. Puede
 indicarse otro orden superior:

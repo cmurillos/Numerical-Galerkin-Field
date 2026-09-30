@@ -1095,17 +1095,25 @@ class GalerkinField:
         )
         return torch.linalg.vector_norm(refined(z) - self(z), dim=-1)
 
-    def solve(self, z0, times, *, step=None, tolerance=None):
+    def state_derivatives(self, z, order):
+        """Indexed coordinate derivatives of this numerical Galerkin field."""
+        from .state_derivatives import state_derivatives
+
+        return state_derivatives(self, z, order)
+
+    def solve(self, z0, times, *, step=None, tolerance=None, order=4, radius=None):
         """Solve the autonomous Galerkin ODE at the requested times."""
         from .evolution import solve
 
-        return solve(self, z0, times, step=step, tolerance=tolerance)
+        return solve(self, z0, times, step=step, tolerance=tolerance, order=order, radius=radius)
 
-    def time_error(self, z0, times, *, step=None, tolerance=None):
-        """Compare RK solutions after halving the step or adaptive tolerance."""
+    def time_error(self, z0, times, *, step=None, tolerance=None, order=4, radius=None):
+        """Compare Taylor solutions after halving the step or tolerance."""
         from .evolution import time_error
 
-        return time_error(self, z0, times, step=step, tolerance=tolerance)
+        return time_error(
+            self, z0, times, step=step, tolerance=tolerance, order=order, radius=radius
+        )
 
     def _states(self, z):
         if not isinstance(z, torch.Tensor):

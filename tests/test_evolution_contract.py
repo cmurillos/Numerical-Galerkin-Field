@@ -16,7 +16,7 @@ def decay_field(dtype=torch.float64):
     return problem.field(basis=basis, quadrature=6, dtype=dtype)
 
 
-def test_fixed_rk4_solves_batched_decay_at_nonuniform_output_times():
+def test_fixed_taylor_solves_batched_decay_at_nonuniform_output_times():
     field = decay_field()
     z0 = torch.randn(2, 3, field.dimension, dtype=field.dtype)
     times = torch.tensor([0.0, 0.13, 0.4, 1.0], dtype=field.dtype)
@@ -27,7 +27,7 @@ def test_fixed_rk4_solves_batched_decay_at_nonuniform_output_times():
     torch.testing.assert_close(states, expected, atol=2e-10, rtol=2e-10)
 
 
-def test_adaptive_rk45_is_the_default_and_supports_backward_time():
+def test_adaptive_taylor_is_the_default_and_supports_backward_time():
     field = decay_field()
     z0 = torch.tensor([0.4, -0.2, 0.7], dtype=field.dtype)
     forward = torch.tensor([0.0, 0.2, 1.0], dtype=field.dtype)
@@ -45,8 +45,8 @@ def test_adaptive_rk45_is_the_default_and_supports_backward_time():
     torch.testing.assert_close(
         backward_states,
         torch.exp(1 - backward).reshape(-1, 1) * z0,
-        atol=2e-9,
-        rtol=2e-9,
+        atol=2e-8,
+        rtol=2e-8,
     )
 
 

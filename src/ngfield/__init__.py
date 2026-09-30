@@ -2,6 +2,7 @@
 
 from .basis import GalerkinBasis
 from .domain import Domain
+from .evolution import DomainExitError, integrate_field
 from .fem import FEMSpace
 from .field import GalerkinField as LegacyGalerkinField
 from .forms import (
@@ -40,6 +41,7 @@ from .spaces import (
     ProductBasis,
     TransformedBasis,
 )
+from .state_derivatives import multi_indices, state_derivatives
 
 __version__ = "0.9.0"
 __all__ = [
@@ -48,6 +50,7 @@ __all__ = [
     "Coefficient",
     "ComponentBasis",
     "Domain",
+    "DomainExitError",
     "FEMSpace",
     "FiniteElementBasis",
     "GalerkinBasis",
@@ -71,7 +74,9 @@ __all__ = [
     "exp",
     "grad",
     "inner",
+    "integrate_field",
     "load_basis",
+    "multi_indices",
     "log",
     "outer",
     "pointwise",
@@ -79,6 +84,7 @@ __all__ = [
     "sin",
     "sqrt",
     "stack",
+    "state_derivatives",
     "sym_grad",
     "tanh",
     "trace",

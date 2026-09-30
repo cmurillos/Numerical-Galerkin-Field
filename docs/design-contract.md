@@ -561,12 +561,13 @@ un contrato geométrico posterior y no forman parte de D-006.
 ### Diferenciación
 
 La evaluación se expresa mediante operaciones PyTorch y conserva autograd respecto de
-`z`. Debe ser compatible con las transformaciones funcionales estándar:
+`z`. Las derivadas necesarias para la aplicación posterior se entregan por
+multiíndice:
 
 ```python
-J = torch.func.jacrev(G)(z)
-_, Jw = torch.func.jvp(G, (z,), (w,))
-_, pullback = torch.func.vjp(G, z)
+D = G.state_derivatives(z, order=2)
+value = D[(0,) * G.dimension]
+partial_first = D[(1,) + (0,) * (G.dimension - 1)]
 ```
 
 También se admiten derivadas de orden superior cuando las operaciones de la forma
@@ -899,11 +900,10 @@ suaves pueden tener Hessianos elementales no nulos.
 ### Diferenciación y base fija
 
 Los tres métodos son lineales en `z` y conservan autograd respecto de sus coordenadas.
-Las derivadas de `G` como aplicación de coeficientes continúan obteniéndose con
+Las derivadas de `G` como aplicación de coeficientes se obtienen con
 
 ```python
-J = torch.func.jacrev(G)(z)
-H = torch.func.jacrev(torch.func.jacrev(G))(z)
+D = G.state_derivatives(z, order=2)
 ```
 
 Los puntos, la geometría, la localización y la base quedan fuera del grafo. Una base
@@ -1019,7 +1019,7 @@ La implementación debe verificar al menos:
 5. rechazo explícito ya existente de `ds.interior`;
 6. ausencia de nuevas clases de condición de frontera o integración temporal.
 
-## D-011 — Evolución temporal por Runge--Kutta
+## D-011 — Evolución temporal por jets de Taylor
 
 **Estado:** aceptada.
 
@@ -1048,9 +1048,10 @@ tensor PyTorch real, finito, estrictamente monótono, no vacío y con el mismo `
 `device` que `G`. Se admiten tiempos crecientes y decrecientes.
 
 ```python
-Z = G.solve(z0, times)  # RK45 adaptativo
-Z = G.solve(z0, times, tolerance=1e-7)  # RK45 adaptativo
-Z = G.solve(z0, times, step=1e-3)  # RK4 fijo
+Z = G.solve(z0, times)  # Taylor de orden 4 con paso adaptativo
+Z = G.solve(z0, times, tolerance=1e-7, order=3)
+Z = G.solve(z0, times, step=1e-3, order=4)  # paso máximo fijo
+Z_local = G.solve(z0, times, radius=R, order=4)  # bola abierta opcional
 ```
 
 No se introduce una clase de trayectoria. Si `z0:[*S,N]`, entonces
@@ -1063,34 +1064,41 @@ Así, la trayectoria completa puede pasarse directamente a `reconstruct`, `grad`
 `hessian` o de nuevo a `G`. Para `T=1` se devuelve solamente el estado inicial con el
 eje temporal añadido. Los lotes vacíos conservan exactamente su forma.
 
-### RK4 fijo
+### Jets y paso fijo
 
 Cuando se especifica `step=h>0`, cada intervalo entre dos tiempos pedidos se divide en
 `ceil(abs(Delta t)/h)` subintervalos iguales. Por tanto `step` es el máximo paso interno,
 los estados se entregan exactamente en `times` y se admiten mallas temporales no
-uniformes. En cada subintervalo se usa el esquema clásico
+uniformes. Para un campo `f` se definen, por diferenciación respecto del estado,
 
 ```text
-k1 = G(z_n),
-k2 = G(z_n + h k1/2),
-k3 = G(z_n + h k2/2),
-k4 = G(z_n + h k3),
-z_(n+1) = z_n + h(k1 + 2k2 + 2k3 + k4)/6.
+J_1[f](z) = f(z),
+J_(r+1)[f](z) = D J_r[f](z) f(z),
+z_(n+1) = z_n + sum_(r=1)^p h^r J_r[f](z_n)/r!.
 ```
 
-### RK45 adaptativo
+### Paso adaptativo y dominio local
 
-Si se omite `step`, se usa el par embebido Dormand--Prince 5(4). La estimación local se
-normaliza componente a componente mediante
+Si se omite `step`, el término de grado `p+1` estima el error local del paso de
+orden `p`. La estimación se normaliza componente a componente mediante
 
 ```text
 tolerance * (1 + max(abs(z_n), abs(z_(n+1)))).
 ```
 
-y el máximo se toma sobre todos los modos y todos los lotes. El algoritmo elige y puede
-rechazar pasos internos sin modificar los tiempos de salida. La tolerancia por defecto
+y el máximo se toma sobre todos los modos y todos los lotes. Esta estimación es
+numérica, no una cota certificada. El algoritmo elige y puede rechazar pasos internos
+sin modificar los tiempos de salida. La tolerancia por defecto
 es `5e-5` en `float32` y `1e-8` en `float64`. `step` y `tolerance` representan modos
-distintos y no pueden combinarse.
+distintos y no pueden combinarse. `order=p` es un entero positivo independiente de
+cualquier orden Sobolev elegido por una aplicación posterior.
+
+Si se entrega `radius=R>0`, el campo se evalúa únicamente en estados de norma menor
+que `R`. Un paso que llega a la frontera o la sobrepasa produce `DomainExitError`
+con el último tiempo y estado interiores aceptados; no se devuelve una trayectoria
+fuera del dominio. El tiempo de salida calculado es aproximado. La restricción es
+opcional en el campo de Galerkin para permitir otros usos; la capa neuronal posterior
+la impone siempre en su propia bola de entrenamiento.
 
 ### Diferenciación y límites
 
@@ -1099,23 +1107,24 @@ dinámicas diferenciables evaluadas por `G`. La aceptación o rechazo de un paso
 adaptativo es una decisión numérica discreta; no se promete diferenciabilidad respecto
 de esa decisión ni respecto de `times`.
 
-Toda velocidad y todo estado producido deben ser finitos. Existe un presupuesto interno
-para impedir bucles ilimitados. RK4 y RK45 son métodos explícitos: D-011 no garantiza
-estabilidad eficiente para difusión severa u otros campos rígidos. Métodos implícitos o
-IMEX podrán añadirse sin cambiar el significado de `G.solve`.
+Todo jet y todo estado producido deben ser finitos. Existe un presupuesto interno
+para impedir bucles ilimitados. Taylor es un método explícito: D-011 no garantiza
+estabilidad eficiente para difusión severa u otros campos rígidos. El campo debe
+poseer las derivadas requeridas a lo largo de la trayectoria.
 
 ### Criterios de aceptación de D-011
 
 La implementación debe verificar al menos:
 
 1. exactitud esperada sobre un campo lineal con solución conocida;
-2. RK4 fijo y RK45 adaptativo en tiempos de salida no uniformes;
+2. Taylor fijo y adaptativo en tiempos de salida no uniformes;
 3. integración hacia adelante y hacia atrás;
 4. conservación de ejes de lote, lotes vacíos y tiempo único;
 5. compatibilidad directa con la reconstrucción de toda la trayectoria;
 6. conservación de autograd respecto del estado inicial;
 7. ejecución en `float32`, `float64`, CPU y, cuando esté disponible, CUDA;
-8. rechazo de estados, tiempos, pasos y tolerancias inválidos o no finitos.
+8. rechazo de estados, tiempos, pasos y tolerancias inválidos o no finitos;
+9. salida de la bola abierta sin evaluación del campo en su exterior.
 
 ## D-012 — Indicadores de error y convergencia
 
@@ -1166,7 +1175,8 @@ Con paso fijo devuelve
 ||Z_h(t_j) - Z_(h/2)(t_j)||_2,
 ```
 
-y con RK45 compara las tolerancias `tol` y `tol/2`. La salida tiene forma `[T,*S]`.
+y con paso adaptativo de Taylor compara las tolerancias `tol` y `tol/2`.
+El mismo `order` se usa en ambas ejecuciones. La salida tiene forma `[T,*S]`.
 Como la síntesis es una isometría, esta norma euclídea coincide exactamente con la
 distancia `L2` entre ambas reconstrucciones. Es un indicador de refinamiento, no una
 cota certificada del error respecto de la solución exacta.
@@ -1803,3 +1813,21 @@ condiciones mixtas y fuente localizada, dos componentes con fronteras diferentes
 difusión periódica con media cero. Todos emplearán geometría y datos del operador
 independientes del tiempo. La parte 7 reúne las comprobaciones del recorrido; no
 pospone las verificaciones de cada implementación.
+
+## D-014 — Derivadas indexadas del campo numérico
+
+**Estado:** aceptada.
+
+Para un entero `k >= 0`, `G.state_derivatives(z, k)` devuelve un diccionario
+indexado por todos los `alpha in N_0^N` con `|alpha| <= k`. Cada valor es
+`partial_z^alpha G(z)` con la misma forma `[*S,N]` que `z`. El índice cero
+devuelve `G(z)`; cada derivada mixta aparece exactamente una vez, sin factores
+factoriales ni ponderaciones. `ngfield.multi_indices(N,k)` proporciona el orden
+determinista de las claves, y `ngfield.state_derivatives(f,z,k)` realiza el mismo
+cálculo para otro campo autónomo compatible, como un campo neuronal.
+
+Se diferencian las coordenadas de estado, nunca la variable espacial de
+`G.grad` o `G.hessian`. Se usa diferenciación direccional automática; la forma
+débil debe admitir las derivadas pedidas. Las tablas geométricas y la base
+permanecen fijas. El número de términos crece como `binomial(N+k,k)`, lo cual
+limita en la práctica las elecciones de `N` y `k`.

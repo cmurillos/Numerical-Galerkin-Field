@@ -267,7 +267,7 @@ geometría, la base, los coeficientes espaciales y la cuadratura representan par
 fijos del operador y se mantienen fuera de ese grafo de diferenciación.
 
 La integración de esta EDO es posterior e independiente de la construcción de `G`.
-El método `G.solve` implementa RK4 fijo o Dormand--Prince 5(4) adaptativo sin modificar
+El método `G.solve` implementa jets de Taylor con paso fijo o adaptativo sin modificar
 el campo. Para tiempos pedidos `t_0,...,t_J` y estados iniciales `z_0` con ejes de lote
 arbitrarios, devuelve el tensor de trayectorias
 
