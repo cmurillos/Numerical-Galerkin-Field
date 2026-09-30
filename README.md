@@ -100,9 +100,16 @@ values = u_t.values(points)
 spatial_gradients = u_t.gradient(points)
 velocity = u_t.velocity()  # another function in the operational space
 indexed = u_t.indexed_derivatives(2)  # alpha -> function representing ∂_a^alpha G(a)
+all_values = solution.values(points)  # all output times, one spatial lookup
 ```
 
-`solution.at(t)` requires a recorded output time. `System.from_coefficients(z)`
+`solution.at(t)` requires a recorded output time.
+`solution.values(points)`, `gradient(points)`, `hessian(points)`, `norm_L2()`
+and `integral()` process the entire sampled path at once. Times can be
+strictly increasing or decreasing, including negative values; the initial
+state belongs to the first requested time.
+
+`System.from_coefficients(z)`
 and `Function.coefficients()` provide an explicit coordinate path. `Function` also
 provides `hessian(points)`, `norm_L2()` and `integral()`; a Hessian is elementwise
 and does not imply global H² conformity. `State.velocity()` and indexed state

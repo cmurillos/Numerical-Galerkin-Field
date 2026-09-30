@@ -6,6 +6,11 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+- Batch indexed JVPs sharing a parent derivative, prebind immutable weak-form
+  evaluation data, and reuse the accepted-state velocity in Taylor jets.
+  Add whole-trajectory spatial evaluation and an explicit compatible-field
+  `FunctionalFlow`; preserve the existing numerical results and APIs.
+- Clarify and test forward and backward integration on negative time grids.
 - Add the function-valued `System`/`State`/`Function`/`Solution` workflow,
   indexed coordinate derivatives reconstructed as functions, grouped numerical
   metrics and partial output paths on numerical open-ball exit. Keep the

@@ -5,10 +5,20 @@ Galerkin reconstruction. Every multi-index occurs exactly once, as in the
 standard integer-order Sobolev norm on a coordinate ball.
 """
 
+from functools import lru_cache
 from itertools import combinations_with_replacement
 from numbers import Integral
 
 import torch
+
+
+@lru_cache(maxsize=128)
+def _indices(dimension, order):
+    result = []
+    for degree in range(order + 1):
+        for axes in combinations_with_replacement(range(dimension), degree):
+            result.append(tuple(axes.count(axis) for axis in range(dimension)))
+    return tuple(result)
 
 
 def multi_indices(dimension, order):
@@ -21,11 +31,7 @@ def multi_indices(dimension, order):
         raise ValueError("dimension must be a positive integer.")
     if isinstance(order, bool) or not isinstance(order, Integral) or order < 0:
         raise ValueError("order must be a nonnegative integer.")
-    result = []
-    for degree in range(order + 1):
-        for axes in combinations_with_replacement(range(dimension), degree):
-            result.append(tuple(axes.count(axis) for axis in range(dimension)))
-    return tuple(result)
+    return _indices(int(dimension), int(order))
 
 
 def state_derivatives(field, states, order):
@@ -37,23 +43,44 @@ def state_derivatives(field, states, order):
     repeating mixed partials. Returned tensors retain their parameter graph.
     """
     field._states(states)
-    indices = multi_indices(field.dimension, order)
+    multi_indices(field.dimension, order)
     directions = torch.eye(field.dimension, dtype=states.dtype, device=states.device)
     functions = {(): field}
-    result = {}
+    result = {(0,) * field.dimension: field(states)}
+    if result[(0,) * field.dimension].shape != states.shape:
+        raise ValueError("A state derivative changed the field's batch or coordinate shape.")
 
-    for alpha in indices:
-        axes = tuple(axis for axis, multiplicity in enumerate(alpha) for _ in range(multiplicity))
-        if axes:
-            parent = functions[axes[:-1]]
-            direction = directions[axes[-1]]
+    for degree in range(1, order + 1):
+        for axes in combinations_with_replacement(range(field.dimension), degree - 1):
+            parent = functions[axes]
+            first = axes[-1] if axes else 0
+            indices = range(first, field.dimension)
 
-            def partial(z, parent=parent, direction=direction):
-                return torch.func.jvp(parent, (z,), (direction.expand_as(z),))[1]
+            def differentiate(direction):
+                return torch.func.jvp(parent, (states,), (direction.expand_as(states),))[1]
 
-            functions[axes] = partial
-        value = functions[axes](states)
-        if value.shape != states.shape:
-            raise ValueError("A state derivative changed the field's batch or coordinate shape.")
-        result[alpha] = value
+            # Group the distinct mixed derivatives with the same parent. This
+            # removes one Python/AD dispatch per coordinate without forming a
+            # full Hessian with repeated mixed entries.
+            chunk_size = max(1, min(len(indices), 1_000_000 // max(1, states.numel())))
+            try:
+                values = torch.vmap(differentiate, chunk_size=chunk_size)(directions[first:])
+            except RuntimeError:
+                # A user-supplied differentiable field need not support vmap.
+                # The original directional-JVP path remains valid in that case.
+                values = torch.stack([differentiate(directions[axis]) for axis in indices])
+
+            for axis, value in zip(indices, values):
+                if value.shape != states.shape:
+                    raise ValueError(
+                        "A state derivative changed the field's batch or coordinate shape."
+                    )
+                alpha = tuple((axes + (axis,)).count(i) for i in range(field.dimension))
+                result[alpha] = value
+                direction = directions[axis]
+
+                def partial(z, parent=parent, direction=direction):
+                    return torch.func.jvp(parent, (z,), (direction.expand_as(z),))[1]
+
+                functions[axes + (axis,)] = partial
     return result

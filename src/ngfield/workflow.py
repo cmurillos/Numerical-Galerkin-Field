@@ -121,6 +121,28 @@ class Solution:
         """Return the sampled path ``[T,*batch,N]``."""
         return self._coefficients.clone()
 
+    def values(self, points=None, *, cells=None, boundary=None):
+        """Reconstruct all output times, locating physical points only once."""
+        return self._owner._field.reconstruct(
+            self._coefficients, points, cells=cells, boundary=boundary
+        )
+
+    def gradient(self, points, *, cells=None):
+        """Evaluate elementwise spatial gradients at every output time."""
+        return self._owner._field.grad(self._coefficients, points, cells=cells)
+
+    def hessian(self, points, *, cells=None):
+        """Evaluate elementwise spatial Hessians at every output time."""
+        return self._owner._field.hessian(self._coefficients, points, cells=cells)
+
+    def norm_L2(self):
+        return torch.linalg.vector_norm(self._coefficients, dim=-1)
+
+    def integral(self):
+        return torch.tensordot(
+            self._coefficients, self._owner._field.integral_weights(), dims=([-1], [0])
+        )
+
     @property
     def times(self):
         return self._times.clone()
@@ -184,30 +206,31 @@ class Metrics:
         return torch.linalg.matrix_norm(matrix, ord=2).max()
 
 
-class System:
-    """Fixed Galerkin system whose flow acts on functions in its operational space."""
+class FunctionalFlow:
+    """Shared function-valued flow over a fixed NGF basis and autonomous field.
 
-    def __init__(
-        self,
-        *,
-        basis,
-        weak,
-        quadrature=None,
-        device="cpu",
-        dtype=torch.float64,
-        max_quadrature_points=1_000_000,
-        max_intermediate_entries=10_000_000,
-    ):
-        self._field = GalerkinField(
-            basis=basis,
-            weak=weak,
-            quadrature=quadrature,
-            device=device,
-            dtype=dtype,
-            max_quadrature_points=max_quadrature_points,
-            max_intermediate_entries=max_intermediate_entries,
-        )
-        self._dynamics = self._field
+    The numerical coordinate system owns projection and reconstruction. The
+    dynamics may instead be a compatible learned reduced field; both must use
+    the same dimension, dtype and device. A radius restricts the phase states
+    and fixes the local integration domain.
+    """
+
+    def __init__(self, coordinate_system, dynamics, *, radius=None):
+        if not isinstance(coordinate_system, GalerkinField):
+            raise TypeError("coordinate_system must be a modern NGF GalerkinField.")
+        if not callable(dynamics) or not callable(getattr(dynamics, "_states", None)):
+            raise TypeError("dynamics must be a compatible autonomous field.")
+        for key in ("dimension", "dtype", "device"):
+            if getattr(coordinate_system, key) != getattr(dynamics, key, None):
+                raise ValueError(f"coordinate_system and dynamics must share {key}.")
+        if radius is not None:
+            if isinstance(radius, bool) or not isinstance(radius, Real):
+                raise TypeError("radius must be a positive real number.")
+            if not isfinite(float(radius)) or radius <= 0:
+                raise ValueError("radius must be a finite positive real number.")
+        self._field = coordinate_system
+        self._dynamics = dynamics
+        self._radius = None if radius is None else float(radius)
         self.metrics = Metrics(self)
 
     @property
@@ -234,8 +257,14 @@ class System:
     def dtype(self):
         return self._field.dtype
 
+    @property
+    def radius(self):
+        return self._radius
+
     def _validate_state(self, z):
         _coordinates(self, z)
+        if self._radius is not None:
+            self._dynamics._states(z)
 
     def _owns(self, state):
         return isinstance(state, State) and state._owner is self
@@ -257,8 +286,11 @@ class System:
         self._validate_state(states)
         return states.reshape(-1, self.dimension)
 
-    @staticmethod
-    def _integration_radius(radius):
+    def _integration_radius(self, radius):
+        if self._radius is not None:
+            if radius is not None and radius != self._radius:
+                raise ValueError("The local flow's open-ball radius cannot be changed.")
+            return self._radius
         return radius
 
     def state(self, source, *, projection_quadrature=None):
@@ -290,3 +322,29 @@ class System:
                 raise
             return Solution(self, error.completed_times, error.completed_states, exit_error=error)
         return Solution(self, times, path)
+
+
+class System(FunctionalFlow):
+    """Fixed numerical Galerkin system acting on functions in its operational space."""
+
+    def __init__(
+        self,
+        *,
+        basis,
+        weak,
+        quadrature=None,
+        device="cpu",
+        dtype=torch.float64,
+        max_quadrature_points=1_000_000,
+        max_intermediate_entries=10_000_000,
+    ):
+        field = GalerkinField(
+            basis=basis,
+            weak=weak,
+            quadrature=quadrature,
+            device=device,
+            dtype=dtype,
+            max_quadrature_points=max_quadrature_points,
+            max_intermediate_entries=max_intermediate_entries,
+        )
+        super().__init__(field, field)

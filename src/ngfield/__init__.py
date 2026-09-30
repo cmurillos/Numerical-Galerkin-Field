@@ -42,7 +42,7 @@ from .spaces import (
     TransformedBasis,
 )
 from .state_derivatives import multi_indices, state_derivatives
-from .workflow import Function, Metrics, Solution, State, System
+from .workflow import Function, FunctionalFlow, Metrics, Solution, State, System
 
 Geometry = SimplicialDomain
 
@@ -57,6 +57,7 @@ __all__ = [
     "FEMSpace",
     "FiniteElementBasis",
     "Function",
+    "FunctionalFlow",
     "GalerkinBasis",
     "GalerkinField",
     "GeneralGalerkinField",

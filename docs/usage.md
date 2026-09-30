@@ -35,6 +35,7 @@ system = System(basis=basis, weak=weak)
 u0_N = system.state(u0)
 path = system.evolve(u0_N, times, order=4, step=0.01)
 u_t = path.at(times[-1])
+all_values = path.values(points)
 values = u_t.values(points)
 gradient = u_t.gradient(points)
 hessian = u_t.hessian(points)
@@ -61,6 +62,10 @@ aceptado si se impone `radius=R`. `System.from_coefficients(z)` y
 `path.coefficients()` dejan disponible el recorrido tensorial cuando se
 necesita. La base sigue siendo L² ortonormal y el orden temporal de Taylor
 es independiente del orden de derivación indexada.
+`path.values/gradient/hessian` procesan todos los tiempos usando una sola
+localización espacial para los puntos dados. La malla de tiempos puede
+crecer o decrecer estrictamente e incluir valores negativos: el dato
+inicial corresponde siempre al primer tiempo solicitado.
 
 
 ## Problema mínimo — construcción desde Space

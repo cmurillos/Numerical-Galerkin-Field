@@ -611,6 +611,32 @@ class GalerkinField:
         self.mass_matrix = mass
         self.orthonormality_error = float(error)
         self.quadrature_order = order
+        self._prepare_action_plan()
+
+    def _prepare_action_plan(self):
+        """Bind immutable weak-form and quadrature data once per prepared table."""
+        by_measure = {
+            ("volume", None if name == "all" else name): table
+            for name, table in self._volumes.items()
+        }
+        by_measure.update((("boundary", name), table) for name, table in self._boundary.items())
+        plan = []
+        for integral in self.form.integrals:
+            label = integral.measure.label or (
+                "all" if integral.measure.kind == "boundary" else None
+            )
+            key = (integral.measure.kind, label)
+            table = by_measure[key]
+            fixed = {
+                "basis": table.basis.__getitem__,
+                "coefficient": table.coefficients.__getitem__,
+                "points": table.points,
+                "normals": table.normals,
+                "dtype": self.dtype,
+                "device": self.device,
+            }
+            plan.append((integral.integrand, key, table, fixed))
+        self._action_plan = tuple(plan)
 
     def _prepare_adaptive(self, initial_order, tolerance):
         if initial_order > _MAX_ADAPTIVE_ORDER:
@@ -677,6 +703,7 @@ class GalerkinField:
         for table in (*self._volumes.values(), *self._boundary.values()):
             table.to(device, dtype)
         self.mass_matrix = self.mass_matrix.to(device=device, dtype=dtype)
+        self._prepare_action_plan()
         return self
 
     def _physical_points(self, points):
@@ -1134,29 +1161,10 @@ class GalerkinField:
 
     def _action(self, z, test):
         result = z.new_zeros((len(z), test.stop - test.start))
-        by_measure = {
-            ("volume", None if name == "all" else name): table
-            for name, table in self._volumes.items()
-        }
-        by_measure.update((("boundary", name), table) for name, table in self._boundary.items())
-        caches = {key: {} for key in by_measure}
-        for integral in self.form.integrals:
-            label = integral.measure.label or (
-                "all" if integral.measure.kind == "boundary" else None
-            )
-            key = (integral.measure.kind, label)
-            table = by_measure[key]
-            context = {
-                "z": z,
-                "test": test,
-                "basis": table.basis.__getitem__,
-                "coefficient": table.coefficients.__getitem__,
-                "points": table.points,
-                "normals": table.normals,
-                "dtype": self.dtype,
-                "device": self.device,
-            }
-            values = evaluate(integral.integrand, context, caches[key])
+        caches = {}
+        for integrand, key, table, fixed in self._action_plan:
+            context = {**fixed, "z": z, "test": test}
+            values = evaluate(integrand, context, caches.setdefault(key, {}))
             expected = (len(z), test.stop - test.start, len(table.points))
             try:
                 values = torch.broadcast_to(values, expected)

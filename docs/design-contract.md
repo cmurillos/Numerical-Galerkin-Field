@@ -1885,3 +1885,29 @@ temporal, la tasa del integral, `radial_rate(a)=<a,G(a)>` y el máximo de
 no una cota Lipschitz global. La norma `Function.norm_L2()` usa la isometría
 operacional; los integrales y sus tasas usan la cuadratura preparada. Ningún
 observable genérico declara conservación o invariancia de la bola.
+
+## D-017 — Preparación y evaluación eficiente sin cambiar el campo
+
+**Estado:** aceptada para el código fuente.
+
+`state_derivatives(field,z,k)` agrupa con `vmap` los JVP que comparten
+derivada padre y conserva la ruta direccional para campos diferenciables que
+no admitan vectorización. Cada índice mixto sigue apareciendo una sola vez,
+con idénticas claves, formas y gradientes. El número de índices sigue siendo
+`binomial(N+k,k)`; la optimización no elimina ese coste matemático.
+
+La tabla preparada liga los datos geométricos, coeficientes fijos y términos
+de la forma débil una vez, y renueva esos enlaces si se cambia tipo o
+dispositivo con `G.to`. Los datos que dependen de `z` se calculan en cada
+llamada. El integrador de jets reutiliza `G(z)` en el paso aceptado sin
+congelar `G` dentro de las derivadas temporales; mantiene el polinomio de
+Taylor y la misma estimación del término omitido.
+
+`FunctionalFlow` separa la proyección/reconstrucción del campo autónomo
+compatible, con dimensión, tipo y dispositivo iguales. `System` construye
+ambos a partir de la forma débil; GNS comparte este recorrido para su campo
+aprendido. `Solution.values`, `gradient`, `hessian`, `norm_L2` e `integral`
+actúan sobre toda la trayectoria `[T,*S,N]`, evitando relocalizar los mismos
+puntos físicos para cada instante. El integrador acepta tiempos finitos
+estrictamente crecientes o decrecientes, positivos o negativos; el dato
+inicial se interpreta en `times[0]` y la salida de la bola sigue siendo local.

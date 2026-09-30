@@ -54,6 +54,14 @@ def test_indexed_derivatives_match_polynomial_and_keep_parameter_gradient():
     empty = state_derivatives(field, torch.empty(2, 0, 2, dtype=torch.float64), 2)
     assert all(value.shape == (2, 0, 2) for value in empty.values())
 
+    third = state_derivatives(field, states, 3)
+    torch.testing.assert_close(
+        third[(2, 1)], field.scale * torch.stack((2 * torch.ones_like(a), torch.zeros_like(b)), -1)
+    )
+    torch.testing.assert_close(
+        third[(1, 2)], field.scale * torch.stack((torch.zeros_like(a), 2 * torch.ones_like(b)), -1)
+    )
+
 
 def test_numerical_galerkin_field_provides_indexed_derivatives():
     problem = GalerkinProblem(

@@ -77,8 +77,23 @@ def _taylor_step(field, state, step, order, *, estimate_error):
     jet = field
     last_term = None
     highest = order + int(estimate_error)
+    velocity = field(state)
     for degree in range(1, highest + 1):
-        value = jet(state)
+        if degree == 1:
+            value = velocity
+        else:
+            previous = jet
+            # The outer directional derivative always uses the velocity at
+            # the same accepted state. Reuse it, while keeping field(z)
+            # variable inside each jet so higher derivatives remain correct.
+            value = torch.func.jvp(previous, (state,), (velocity,))[1]
+
+            if degree < highest:
+
+                def next_jet(z, previous=previous):
+                    return torch.func.jvp(previous, (z,), (field(z),))[1]
+
+                jet = next_jet
         if value.shape != state.shape:
             raise ValueError("A Taylor jet changed the field's batch or coordinate shape.")
         if not torch.isfinite(value).all():
@@ -88,13 +103,6 @@ def _taylor_step(field, state, step, order, *, estimate_error):
             result = result + term
         else:
             last_term = term
-        if degree < highest:
-            previous = jet
-
-            def next_jet(z, previous=previous):
-                return torch.func.jvp(previous, (z,), (field(z),))[1]
-
-            jet = next_jet
     if not torch.isfinite(result).all():
         raise FloatingPointError("Taylor integration produced a nonfinite state.")
     return result, last_term

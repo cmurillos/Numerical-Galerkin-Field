@@ -303,6 +303,11 @@ followed by `system.evolve(initial,times)`. `State.velocity()` and
 `State.indexed_derivatives(k)` reconstruct functions in the fixed basis;
 the latter differentiates the reduced field with respect to state coordinates.
 `Function.gradient/hessian` remain spatial, elementwise operations.
+`FunctionalFlow` is the explicit NGF contract for a compatible autonomous
+reduced field; it validates dimension, dtype and device. `Solution.values`
+and its spatial derivatives evaluate the entire path in a single basis lookup.
+Indexed derivative batching must retain mixed-index uniqueness and a scalar
+JVP fallback for differentiable fields unsupported by `vmap`.
 
 ## Time integration and numerical indicators
 

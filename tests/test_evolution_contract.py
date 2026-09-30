@@ -59,6 +59,35 @@ def test_adaptive_taylor_is_the_default_and_supports_backward_time():
     )
 
 
+def test_high_order_taylor_keeps_nonlinear_jets_correct_for_negative_times():
+    class QuadraticField:
+        dimension = 1
+        dtype = torch.float64
+        device = torch.device("cpu")
+
+        def _states(self, state):
+            assert state.shape[-1] == 1
+
+        def __call__(self, state):
+            return state.square()
+
+    from ngfield import integrate_field
+
+    field = QuadraticField()
+    initial = torch.tensor([0.2], dtype=field.dtype, requires_grad=True)
+    times = torch.tensor([0.0, -0.1, -0.25], dtype=field.dtype)
+    states = integrate_field(field, initial, times, step=0.025, order=5)
+    expected = initial / (1 - initial * times[:, None])
+    torch.testing.assert_close(states, expected, atol=1e-11, rtol=1e-11)
+    states[-1].sum().backward()
+    torch.testing.assert_close(
+        initial.grad,
+        (1 - initial.detach() * times[-1]).reciprocal().square(),
+        atol=1e-10,
+        rtol=1e-10,
+    )
+
+
 def test_default_adaptive_solver_supports_float32():
     field = decay_field(torch.float32)
     z0 = torch.tensor([0.4, -0.2, 0.7], dtype=field.dtype)

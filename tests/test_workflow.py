@@ -82,3 +82,17 @@ def test_workflow_preserves_batches_and_reports_partial_exit_without_evaluating_
     assert torch.all(solution.at(-0.3).norm_L2() < 0.5)
     with pytest.raises(ValueError, match="this system"):
         decay_system().indexed_derivatives(state, 1)
+
+
+def test_solution_reconstructs_all_negative_output_times_in_one_call():
+    system = decay_system()
+    initial = system.from_coefficients(torch.tensor([0.2, -0.1], dtype=system.dtype))
+    times = torch.tensor([0.0, -0.1, -0.25], dtype=system.dtype)
+    path = system.evolve(initial, times, step=0.02)
+    points = torch.tensor([[0.2], [0.8]], dtype=system.dtype)
+    for name in ("values", "gradient", "hessian"):
+        together = getattr(path, name)(points)
+        individually = torch.stack([getattr(path.at(t), name)(points) for t in times])
+        torch.testing.assert_close(together, individually)
+    torch.testing.assert_close(path.norm_L2(), torch.stack([path.at(t).norm_L2() for t in times]))
+    torch.testing.assert_close(path.integral(), torch.stack([path.at(t).integral() for t in times]))
