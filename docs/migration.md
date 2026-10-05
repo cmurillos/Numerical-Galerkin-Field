@@ -263,3 +263,12 @@ Para comprobar una migración, comparar primero la reconstrucción y las velocid
 físicas, luego las restricciones pertinentes y finalmente las trayectorias. Los
 [ejemplos de aceptación](acceptance-examples.md) muestran referencias adecuadas a
 cada problema; coincidir en un número de modos no es una comprobación suficiente.
+
+## Evento de frontera del código fuente
+
+`DomainExitError.time` y `.last_state` siguen describiendo el último punto
+interior aceptado. Los nuevos `.exit_time`, `.exit_state` y `.exit_mask`
+describen por separado el primer contacto numérico del polinomio aceptado.
+El evento no pertenece a la trayectoria interior. `Solution.exit_status()`
+lo expone como `Function` para reconstrucción, sin convertirlo en `State`.
+Estas adiciones requieren instalar el código fuente que implementa D-018.

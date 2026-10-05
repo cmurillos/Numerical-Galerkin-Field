@@ -148,7 +148,7 @@ class Solution:
         return self._times.clone()
 
     def exit_status(self):
-        """Numerical open-ball status; the last accepted time is not an exact exit."""
+        """Interior prefix and separate numerical boundary event; no continuation."""
         if self._exit_error is None:
             time, state = float(self._times[-1]), self._coefficients[-1]
         else:
@@ -157,6 +157,17 @@ class Solution:
             "exited": self._exit_error is not None,
             "last_accepted_time": time,
             "last_accepted_state": State(self._owner, state),
+            "exit_time": None if self._exit_error is None else self._exit_error.exit_time,
+            "exit_state": (
+                None
+                if self._exit_error is None or self._exit_error.exit_state is None
+                else Function(self._owner, self._exit_error.exit_state)
+            ),
+            "exit_mask": (
+                None
+                if self._exit_error is None or self._exit_error.exit_mask is None
+                else self._exit_error.exit_mask.clone()
+            ),
         }
 
 

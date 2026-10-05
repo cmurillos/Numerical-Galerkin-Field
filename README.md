@@ -122,7 +122,10 @@ language remain the same in both workflows.
 `radial_rate(u_t)` and `sampled_lipschitz(states_test)`. The last result is a
 maximum over supplied points, not a global bound. `solution.exit_status()`
 reports a numerical last accepted interior state if `radius=R` stops the local
-trajectory; its `last_accepted_time` is not an exact exit time.
+trajectory. The separate `exit_time`, `exit_state` (`Function`) and `exit_mask`
+record first numerical boundary contact; `last_accepted_time`/state describe
+the interior prefix. The event is localized on the accepted Taylor polynomial
+and is not an exact ODE exit certificate or a continued trajectory.
 See the executable [function-valued example](examples/functional_workflow.py).
 
 ## Core interface

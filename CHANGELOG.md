@@ -6,6 +6,12 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+- Localize first numerical open-ball contact on each accepted Taylor polynomial,
+  including contact followed by reentry. Preserve last-interior exception data
+  and add separate boundary time/state and contacting batch mask. Functional
+  solutions keep only interior outputs and expose the event as a Function;
+  no exterior field calls, frozen continuation or exact-exit certificate.
+
 - Batch indexed JVPs sharing a parent derivative, prebind immutable weak-form
   evaluation data, and reuse the accepted-state velocity in Taylor jets.
   Add whole-trajectory spatial evaluation and an explicit compatible-field

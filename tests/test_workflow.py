@@ -77,6 +77,15 @@ def test_workflow_preserves_batches_and_reports_partial_exit_without_evaluating_
     assert status["exited"]
     assert isinstance(status["last_accepted_state"], State)
     assert status["last_accepted_time"] <= -0.3
+    assert status["exit_time"] == pytest.approx(
+        -torch.log(torch.tensor(0.5 / 0.3)).item(), abs=5e-5
+    )
+    assert isinstance(status["exit_state"], Function)
+    assert not isinstance(status["exit_state"], State)
+    assert status["exit_mask"].tolist() == [[False], [True]]
+    assert status["exit_state"].norm_L2()[1, 0] == pytest.approx(0.5)
+    with pytest.raises(ValueError, match="output times"):
+        solution.at(status["exit_time"])
     assert solution.coefficients().shape == (3, 2, 1, 2)
     assert solution.times.shape == (3,)
     assert torch.all(solution.at(-0.3).norm_L2() < 0.5)

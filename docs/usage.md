@@ -57,7 +57,8 @@ registrado; para otro `t`, se integra de nuevo con el tiempo pedido.
 `system.metrics` agrupa `projection`, `quadrature`, `time_refinement`,
 `integral_rate`, `radial_rate` y `sampled_lipschitz`. Los tres primeros son
 indicadores numéricos absolutos; el último es sólo una máxima muestral.
-`path.exit_status()` indica salida numérica y el último estado interior
+`path.exit_status()` indica salida numérica, el evento de frontera separado
+(`exit_time`, `exit_state`, `exit_mask`) y el último estado interior
 aceptado si se impone `radius=R`. `System.from_coefficients(z)` y
 `path.coefficients()` dejan disponible el recorrido tensorial cuando se
 necesita. La base sigue siendo L² ortonormal y el orden temporal de Taylor

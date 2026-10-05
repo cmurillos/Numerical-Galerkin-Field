@@ -354,3 +354,13 @@ una futura extensión isoparamétrica. `FiniteElementBasis` produce Lagrange con
 grado arbitrario; las derivadas de orden superior son elementales y no implican por sí
 mismas conformidad global en H2 u otros espacios. La validez analítica de una forma
 respecto del espacio elegido continúa siendo una condición matemática del problema.
+
+## Flujo local y frontera de la bola
+
+Para `radius=R` sólo se usan estados de norma estrictamente menor que `R`.
+Identidad, composición e inversa del flujo exacto se entienden en dominios
+admisibles; no se declara invariancia de la bola. El primer contacto numérico
+se localiza en el polinomio de Taylor aceptado y se registra como evento,
+separado de las salidas interiores. No certifica el instante exacto de la EDO.
+Una comparación con otro campo termina al primer contacto de cualquiera de
+las dos trayectorias; no se añade una continuación congelada ni un flujo global.

@@ -318,7 +318,11 @@ field's dtype/device. `ngfield.integrate_field` is the same engine used by the
 downstream neural package: use the same order and time controls for comparisons.
 The optional `radius=R` stops trajectories at the open-ball boundary with
 `DomainExitError`, including the last accepted interior state/time. The numerical
-exit time is approximate; no exterior field evaluation occurs.
+exit time is approximate; no exterior field evaluation occurs. D-018 locates
+first contact of the accepted Taylor polynomial, including reentry. Keep
+`exit_time`, boundary `exit_state` and batch `exit_mask` separate from
+`time`/`last_state` and completed interior outputs. Never freeze a path or
+convert its boundary event to a phase State.
 
 Both methods are explicit. Do not describe them as suitable for stiff diffusion merely
 because they return a result. If a run is unstable or expensive, expose the stiffness/time

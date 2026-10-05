@@ -1095,8 +1095,11 @@ cualquier orden Sobolev elegido por una aplicación posterior.
 
 Si se entrega `radius=R>0`, el campo se evalúa únicamente en estados de norma menor
 que `R`. Un paso que llega a la frontera o la sobrepasa produce `DomainExitError`
-con el último tiempo y estado interiores aceptados; no se devuelve una trayectoria
-fuera del dominio. El tiempo de salida calculado es aproximado. La restricción es
+con el último tiempo y estado interiores aceptados y un evento de frontera
+separado (`exit_time`, `exit_state`, `exit_mask`); no se devuelve una trayectoria
+fuera del dominio. D-018 localiza el primer contacto del polinomio de Taylor
+aceptado, incluso si el extremo del paso vuelve al interior. El tiempo de salida
+calculado es aproximado y no certifica el contacto de la EDO exacta. La restricción es
 opcional en el campo de Galerkin para permitir otros usos; la capa neuronal posterior
 la impone siempre en su propia bola de entrenamiento.
 
@@ -1875,8 +1878,9 @@ de este `k`.
 integrador de D-011. `solution.at(t)` sólo acepta un tiempo de salida registrado
 y devuelve `State`; no interpola. Si se alcanza la bola abierta, la solución
 conserva únicamente las salidas ya completadas y `exit_status()` devuelve
-el último tiempo y estado interiores aceptados. Son datos numéricos y no una
-certificación del instante exacto de salida. `solution.coefficients()` devuelve
+el último tiempo y estado interiores aceptados, separados del evento numérico
+de frontera. `exit_state` es un `Function`, nunca un `State` admisible. Son datos
+numéricos y no una certificación del instante exacto de salida. `solution.coefficients()` devuelve
 `[T,*S,N]` como vía explícita de interoperabilidad.
 
 `system.metrics` agrupa indicadores de proyección, cuadratura y refinamiento
@@ -1911,3 +1915,30 @@ actúan sobre toda la trayectoria `[T,*S,N]`, evitando relocalizar los mismos
 puntos físicos para cada instante. El integrador acepta tiempos finitos
 estrictamente crecientes o decrecientes, positivos o negativos; el dato
 inicial se interpreta en `times[0]` y la salida de la bola sigue siendo local.
+
+## D-018 — Primer contacto y evento de frontera
+
+**Estado:** aceptada para el código fuente.
+
+Con `radius=R`, el flujo se usa únicamente en `||z||<R`. Los jets se evalúan
+en el estado interior inicial de cada paso. El polinomio denso aceptado `P(u)`,
+`0<=u<=1`, permite localizar el primer cero de `||P(u)||²-R²` en la dirección
+de integración. Se detecta también un contacto seguido de reentrada durante
+el mismo paso. Una cota triangular evita calcular raíces cuando asegura que
+todo el polinomio permanece interior. El control de error adaptativo se aplica
+antes del evento: un paso rechazado por error no declara una salida.
+
+`DomainExitError.time` y `.last_state` conservan su significado anterior.
+`.exit_time`, `.exit_state` y `.exit_mask` registran el evento separado; la
+máscara identifica las entradas del lote que alcanzan el primer contacto.
+Se conservan formas arbitrarias `[...,N]`, tipo y dispositivo. La máscara y
+las raíces son decisiones numéricas sin promesa de diferenciabilidad. El
+estado de frontera no se añade a las salidas interiores ni se prolonga por
+congelación. El error de integración y la localización de raíces impiden
+interpretar este evento como certificado del contacto exacto de la EDO.
+
+`Solution.exit_status()` expone ambos registros. El estado del evento es un
+`Function` reconstruible, no un punto de fase `State`. Sin salida los campos
+del evento son `None`. No cambia la construcción ni la evaluación del campo
+Galerkin, y el radio sigue siendo opcional en NGF. La capa neuronal impone su
+radio de entrenamiento y mantiene cualquier convención exterior separada.
