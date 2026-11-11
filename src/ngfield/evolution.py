@@ -78,7 +78,7 @@ def _inputs(field, z0, times, radius):
             raise ValueError("times must be strictly monotone.")
 
 
-def _taylor_jets(field, state, highest):
+def _autodiff_taylor_jets(field, state, highest):
     """Use J_1=f, J_(r+1)=D J_r f; evaluate f only at the interior state."""
     jet = field
     velocity = field(state)
@@ -98,6 +98,16 @@ def _taylor_jets(field, state, highest):
                     return torch.func.jvp(previous, (z,), (field(z),))[1]
 
                 jet = next_jet
+        yield value
+
+
+def _taylor_jets(field, state, highest):
+    """Use specialized jets when supplied, with the same integration contract."""
+    provider = getattr(field, "_taylor_jets", None)
+    values = None if provider is None else provider(state, highest)
+    if values is None:
+        values = _autodiff_taylor_jets(field, state, highest)
+    for _, value in zip(range(highest), values, strict=True):
         if value.shape != state.shape:
             raise ValueError("A Taylor jet changed the field's batch or coordinate shape.")
         if not torch.isfinite(value).all():

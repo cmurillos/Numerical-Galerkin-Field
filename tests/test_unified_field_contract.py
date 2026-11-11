@@ -256,6 +256,24 @@ def test_numerical_options_and_fixed_callbacks_are_shared_by_both_routes(quadrat
     assert G.quadrature_mode == H.quadrature_mode and G.quadrature_order == H.quadrature_order
 
 
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_factored_weak_form_matches_the_general_evaluator_and_its_derivatives(dtype):
+    basis = Space(geometry=interval(4), components=1).basis(size=3)
+
+    def weak(u, v, dx, ds):
+        volume = -0.03 * inner(grad(u[0]), grad(v[0])) + 0.5 * u[0] ** 2 * grad(v[0])[0]
+        return volume * dx + (0.1 - u[0]) * v[0] * ds
+
+    options = dict(basis=basis, weak=weak, quadrature=6, dtype=dtype)
+    factored = GalerkinField(**options)
+    general = GalerkinField(**options, max_intermediate_entries=1)
+    assert factored._factored_action_plan is not None
+    assert general._factored_action_plan is None
+    z = torch.linspace(-0.2, 0.3, 12, dtype=dtype).reshape(2, 2, 3)
+    torch.testing.assert_close(factored(z), general(z))
+    torch.testing.assert_close(torch.func.jacrev(factored)(z), torch.func.jacrev(general)(z))
+
+
 def test_legacy_positional_and_keyword_calls_remain_legacy_fields():
     fem = FEMSpace(Domain(MeshLine(np.linspace(0, 1, 7))))
     problem = Problem(1, lambda x, u, du: (0, -du), (("all",),))

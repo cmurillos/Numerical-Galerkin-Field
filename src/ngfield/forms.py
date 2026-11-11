@@ -803,6 +803,48 @@ def derivative_orders(form):
     return result
 
 
+def _pure_test(expression):
+    if expression.op == "v":
+        return True
+    return expression.op in ("index", "stack") and all(
+        _pure_test(argument) for argument in expression.args
+    )
+
+
+def _independent_of_test(expression):
+    return expression.op != "v" and all(
+        _independent_of_test(argument) for argument in expression.args
+    )
+
+
+def factored_test_terms(expression):
+    """Split supported scalar integrands into state factors paired with test factors."""
+    op = expression.op
+    if op in ("add", "sub"):
+        left, right = map(factored_test_terms, expression.args)
+        if left is None or right is None:
+            return None
+        if op == "sub":
+            right = tuple((-state, test) for state, test in right)
+        return left + right
+    if op == "neg":
+        terms = factored_test_terms(expression.args[0])
+        return None if terms is None else tuple((-state, test) for state, test in terms)
+    if op in ("inner", "mul"):
+        a, b = expression.args
+        if a.test_degrees == frozenset({1}):
+            a, b = b, a
+        if a.test_degrees - {0} or not _independent_of_test(a):
+            return None
+        if a.shape == b.shape and _pure_test(b):
+            return ((a, b),)
+        if op == "mul" and not a.shape:
+            terms = factored_test_terms(b)
+            if terms is not None:
+                return tuple((a * state, test) for state, test in terms)
+    return None
+
+
 def coefficient_expressions(form):
     result = {"volume": {}, "boundary": {}}
     for integral in form.integrals:

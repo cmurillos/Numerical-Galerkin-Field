@@ -6,6 +6,12 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+- Contract separable weak integrands against weighted test values without
+  materializing the batch-by-test-by-quadrature product. Keep the general
+  evaluator for other expressions and respect the intermediate-entry budget.
+- Allow compatible autonomous fields to supply their own Taylor jets to the
+  existing step control and boundary-event routines.
+
 - Reuse spatial reconstructions across test-function blocks, reuse fixed
   scalar operands and keep the most recent refined quadrature field.
 - Reuse the field value from compatible batched first derivatives and retain
