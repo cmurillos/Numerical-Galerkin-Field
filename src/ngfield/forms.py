@@ -622,6 +622,37 @@ def build_form(callback, value_shape, spatial_dimension):
     return form
 
 
+def _fixed_form_key(form):
+    """Identify expressions with immutable operands and no opaque callbacks."""
+
+    def data_key(value):
+        if value is None or type(value) in (bool, int, str):
+            return type(value), value
+        if type(value) is float:
+            return float, value.hex()
+        if type(value) is tuple:
+            return tuple, tuple(data_key(item) for item in value)
+        raise TypeError
+
+    def expression_key(expression):
+        if expression.op in ("pointwise", "coefficient"):
+            raise TypeError
+        return (
+            expression.op,
+            expression.shape,
+            data_key(expression.data),
+            tuple(expression_key(arg) for arg in expression.args),
+        )
+
+    try:
+        return tuple(
+            (integral.measure.kind, integral.measure.label, expression_key(integral.integrand))
+            for integral in form.integrals
+        )
+    except TypeError:
+        return None
+
+
 def _pad(value, shape, rank):
     return value.reshape(*value.shape[:3], *((1,) * (rank - len(shape))), *shape)
 
@@ -659,7 +690,9 @@ def evaluate(expression, context, cache=None):
     if expression in cache:
         return cache[expression]
     op = expression.op
-    if op in ("u", "v"):
+    if op == "u" and expression.data in context["reconstructed"]:
+        value = context["reconstructed"][expression.data]
+    elif op in ("u", "v"):
         table = context["basis"](len(expression.data))
         table = table[
             (slice(None), slice(None))
@@ -668,11 +701,15 @@ def evaluate(expression, context, cache=None):
         ]
         if op == "u":
             value = torch.einsum("bn,qn...->bq...", context["z"], table).unsqueeze(1)
+            context["reconstructed"][expression.data] = value
         else:
             value = table[:, context["test"]].movedim(0, 1).unsqueeze(0)
     elif op == "constant":
-        value = torch.as_tensor(expression.data, dtype=context["dtype"], device=context["device"])
-        value = value.reshape(1, 1, 1, *expression.shape)
+        value = context["constants"].get(expression)
+        if value is None:
+            value = torch.as_tensor(
+                expression.data, dtype=context["dtype"], device=context["device"]
+            ).reshape(1, 1, 1, *expression.shape)
     elif op == "x":
         value = context["points"].reshape(1, 1, len(context["points"]), *expression.shape)
     elif op == "normal":

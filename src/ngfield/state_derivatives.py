@@ -34,6 +34,12 @@ def multi_indices(dimension, order):
     return _indices(int(dimension), int(order))
 
 
+def _field_value(states, value):
+    if value.shape != states.shape:
+        raise ValueError("A state derivative changed the field's batch or coordinate shape.")
+    return {(0,) * states.shape[-1]: value}
+
+
 def state_derivatives(field, states, order):
     """Evaluate ``partial_z^alpha field(states)`` for all ``|alpha| <= order``.
 
@@ -44,11 +50,15 @@ def state_derivatives(field, states, order):
     """
     field._states(states)
     multi_indices(field.dimension, order)
+    if order == 0:
+        return _field_value(states, field(states))
+
+    prepare = getattr(field, "_prepare_state_derivatives", None)
+    if prepare is not None:
+        prepare()
     directions = torch.eye(field.dimension, dtype=states.dtype, device=states.device)
     functions = {(): field}
-    result = {(0,) * field.dimension: field(states)}
-    if result[(0,) * field.dimension].shape != states.shape:
-        raise ValueError("A state derivative changed the field's batch or coordinate shape.")
+    result = None
 
     for degree in range(1, order + 1):
         for axes in combinations_with_replacement(range(field.dimension), degree - 1):
@@ -56,19 +66,35 @@ def state_derivatives(field, states, order):
             first = axes[-1] if axes else 0
             indices = range(first, field.dimension)
 
+            def value_and_derivative(direction):
+                return torch.func.jvp(parent, (states,), (direction.expand_as(states),))
+
             def differentiate(direction):
-                return torch.func.jvp(parent, (states,), (direction.expand_as(states),))[1]
+                return value_and_derivative(direction)[1]
 
             # Group the distinct mixed derivatives with the same parent. This
             # removes one Python/AD dispatch per coordinate without forming a
             # full Hessian with repeated mixed entries.
             chunk_size = max(1, min(len(indices), 1_000_000 // max(1, states.numel())))
-            try:
-                values = torch.vmap(differentiate, chunk_size=chunk_size)(directions[first:])
-            except RuntimeError:
-                # A user-supplied differentiable field need not support vmap.
-                # The original directional-JVP path remains valid in that case.
-                values = torch.stack([differentiate(directions[axis]) for axis in indices])
+            values = None
+            if degree == 1 and chunk_size == len(indices):
+                try:
+                    primal, values = torch.vmap(value_and_derivative, out_dims=(None, 0))(
+                        directions
+                    )
+                except (RuntimeError, ValueError):
+                    # Some user fields do not support returning an unbatched primal under vmap.
+                    pass
+                else:
+                    result = _field_value(states, primal)
+            if result is None:
+                result = _field_value(states, field(states))
+            if values is None:
+                try:
+                    values = torch.vmap(differentiate, chunk_size=chunk_size)(directions[first:])
+                except RuntimeError:
+                    # A user-supplied differentiable field need not support vmap.
+                    values = torch.stack([differentiate(directions[axis]) for axis in indices])
 
             for axis, value in zip(indices, values):
                 if value.shape != states.shape:
@@ -77,6 +103,8 @@ def state_derivatives(field, states, order):
                     )
                 alpha = tuple((axes + (axis,)).count(i) for i in range(field.dimension))
                 result[alpha] = value
+                if degree == order:
+                    continue
                 direction = directions[axis]
 
                 def partial(z, parent=parent, direction=direction):

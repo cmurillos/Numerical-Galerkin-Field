@@ -63,6 +63,26 @@ def test_indexed_derivatives_match_polynomial_and_keep_parameter_gradient():
     )
 
 
+def test_first_order_derivatives_reuse_the_primal_and_keep_its_gradient(monkeypatch):
+    field = PolynomialField()
+    states = torch.tensor([[0.2, -0.4]], dtype=torch.float64)
+    expected = field(states).detach()
+    calls = []
+    forward = field.forward
+
+    def counted(state):
+        calls.append(None)
+        return forward(state)
+
+    monkeypatch.setattr(field, "forward", counted)
+    values = state_derivatives(field, states, 1)
+
+    assert len(calls) == 1
+    torch.testing.assert_close(values[(0, 0)], expected, atol=0, rtol=0)
+    values[(0, 0)].sum().backward()
+    torch.testing.assert_close(field.scale.grad, expected.sum())
+
+
 def test_numerical_galerkin_field_provides_indexed_derivatives():
     problem = GalerkinProblem(
         vertices=[[0.0], [1.0]],

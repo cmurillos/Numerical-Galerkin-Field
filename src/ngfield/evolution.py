@@ -78,13 +78,9 @@ def _inputs(field, z0, times, radius):
             raise ValueError("times must be strictly monotone.")
 
 
-def _taylor_step(field, state, step, order, *, estimate_error):
+def _taylor_jets(field, state, highest):
     """Use J_1=f, J_(r+1)=D J_r f; evaluate f only at the interior state."""
-    result = state
     jet = field
-    last_term = None
-    terms = []
-    highest = order + int(estimate_error)
     velocity = field(state)
     for degree in range(1, highest + 1):
         if degree == 1:
@@ -106,6 +102,14 @@ def _taylor_step(field, state, step, order, *, estimate_error):
             raise ValueError("A Taylor jet changed the field's batch or coordinate shape.")
         if not torch.isfinite(value).all():
             raise FloatingPointError("The field returned a nonfinite Taylor jet.")
+        yield value
+
+
+def _taylor_step(state, step, order, jets):
+    result = state
+    last_term = None
+    terms = []
+    for degree, value in enumerate(jets, 1):
         term = (step**degree / factorial(degree)) * value
         if degree <= order:
             result = result + term
@@ -197,7 +201,7 @@ def _fixed_interval(field, state, start, stop, maximum_step, order, radius, budg
         raise RuntimeError("Time integration exceeded its internal step budget.")
     step = (stop - start) / count
     for index in range(count):
-        candidate, _, terms = _taylor_step(field, state, step, order, estimate_error=False)
+        candidate, _, terms = _taylor_step(state, step, order, _taylor_jets(field, state, order))
         _check_boundary(state, terms, radius, start + index * step, step)
         state = candidate
     return state, count
@@ -209,13 +213,16 @@ def _adaptive_interval(field, state, start, stop, tolerance, order, radius, budg
     step_size = abs(stop - start)
     attempts = 0
     epsilon = torch.finfo(field.dtype).eps
+    jets = None
     while direction * (stop - current) > 0:
         if attempts >= budget:
             raise RuntimeError("Time integration exceeded its internal step budget.")
         remaining = abs(stop - current)
         step_size = min(step_size, remaining)
         signed_step = direction * step_size
-        candidate, term, terms = _taylor_step(field, state, signed_step, order, estimate_error=True)
+        if jets is None:
+            jets = tuple(_taylor_jets(field, state, order + 1))
+        candidate, term, terms = _taylor_step(state, signed_step, order, jets)
         attempts += 1
         minimum = 16 * epsilon * max(1.0, abs(current), abs(stop))
         scale = tolerance * (1 + torch.maximum(torch.abs(state), torch.abs(candidate)))
@@ -225,6 +232,7 @@ def _adaptive_interval(field, state, start, stop, tolerance, order, radius, budg
         if error <= 1:
             _check_boundary(state, terms, radius, current, signed_step)
             state = candidate
+            jets = None
             current += signed_step
             if abs(stop - current) <= minimum:
                 current = stop
@@ -292,15 +300,22 @@ def solve(field, z0, times, *, step=None, tolerance=None, order=4, radius=None):
 
 def time_error(field, z0, times, *, step=None, tolerance=None, order=4, radius=None):
     """Return the absolute temporal refinement indicator at requested times."""
+    return _time_error(field, z0, times, step=step, tolerance=tolerance, order=order, radius=radius)
+
+
+def _time_error(field, z0, times, *, step, tolerance, order, radius, coarse=None):
+    """Allow the downstream diagnostic to supply the matching completed coarse path."""
     if step is not None and tolerance is not None:
         raise ValueError("step and tolerance cannot be combined.")
     if step is not None:
         coarse_step = _positive_real(step, "step")
-        coarse = solve(field, z0, times, step=coarse_step, order=order, radius=radius)
+        if coarse is None:
+            coarse = solve(field, z0, times, step=coarse_step, order=order, radius=radius)
         refined = solve(field, z0, times, step=coarse_step / 2, order=order, radius=radius)
     else:
         coarse_tolerance = _tolerance(tolerance, field.dtype)
-        coarse = solve(field, z0, times, tolerance=coarse_tolerance, order=order, radius=radius)
+        if coarse is None:
+            coarse = solve(field, z0, times, tolerance=coarse_tolerance, order=order, radius=radius)
         refined = solve(
             field, z0, times, tolerance=coarse_tolerance / 2, order=order, radius=radius
         )
