@@ -14,6 +14,7 @@ from .forms import (
     coefficient_expressions,
     derivative_orders,
     evaluate,
+    factored_test_terms,
 )
 from .geometry import SimplicialDomain, positive_integer
 from .spaces import TransformedBasis
@@ -656,6 +657,24 @@ class GalerkinField:
             }
             plan.append((integral.integrand, key, table, fixed))
         self._action_plan = tuple(plan)
+        self._factored_action_plan = self._prepare_factored_action()
+
+    def _prepare_factored_action(self):
+        plan = []
+        remaining = self.max_intermediate_entries
+        for integrand, key, table, fixed in self._action_plan:
+            terms = factored_test_terms(integrand)
+            if terms is None:
+                return None
+            for state, test in terms:
+                remaining -= self.dimension * len(table.weights) * prod(test.shape)
+                if remaining < 0:
+                    return None
+                tests = evaluate(test, {**fixed, "test": slice(0, self.dimension)})[0]
+                weights = table.weights.reshape(1, -1, *((1,) * len(test.shape)))
+                weighted = (tests * weights).reshape(self.dimension, -1).contiguous()
+                plan.append((state, key, fixed, len(table.weights), weighted))
+        return tuple(plan)
 
     def _same_fixed_action(self, other):
         """Check whether a downstream training run can reuse detached targets."""
@@ -746,6 +765,8 @@ class GalerkinField:
             tensors.extend(table.coefficients.values())
             if table.normals is not None:
                 tensors.append(table.normals)
+        if self._factored_action_plan is not None:
+            tensors.extend(term[-1] for term in self._factored_action_plan)
         return sum(tensor.numel() * tensor.element_size() for tensor in tensors)
 
     def to(self, device=None, dtype=None):
@@ -1248,10 +1269,22 @@ class GalerkinField:
             result = result + torch.einsum("bjq,q->bj", values, table.weights)
         return result
 
+    def _factored_action(self, z):
+        result = z.new_zeros((len(z), self.dimension))
+        caches, reconstructions = {}, {}
+        for state, key, fixed, nodes, weighted in self._factored_action_plan:
+            context = {**fixed, "z": z, "reconstructed": reconstructions.setdefault(key, {})}
+            values = evaluate(state, context, caches.setdefault(key, {}))
+            values = values.expand(len(z), 1, nodes, *state.shape).reshape(len(z), -1)
+            result = result + torch.nn.functional.linear(values, weighted)
+        return result
+
     def __call__(self, z):
         z, batch_shape = self._states(z)
         if not len(z):
             return z.clone().reshape((*batch_shape, self.dimension))
+        if self._factored_action_plan is not None:
+            return self._factored_action(z).reshape((*batch_shape, self.dimension))
         denominator = max(1, len(z) * max(1, len(self._volume.points)))
         chunk = max(1, min(self.dimension, self.max_intermediate_entries // denominator))
         reconstructions = {}
