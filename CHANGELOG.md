@@ -6,6 +6,11 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+- Reuse spatial reconstructions across test-function blocks, reuse fixed
+  scalar operands and keep the most recent refined quadrature field.
+- Reuse the field value from compatible batched first derivatives and retain
+  Taylor jets when an adaptive step retries from the same state.
+
 - Localize first numerical open-ball contact on each accepted Taylor polynomial,
   including contact followed by reentry. Preserve last-interior exception data
   and add separate boundary time/state and contacting batch mask. Functional

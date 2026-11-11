@@ -7,7 +7,14 @@ from numbers import Integral, Real
 import numpy as np
 import torch
 
-from .forms import Coefficient, build_form, coefficient_expressions, derivative_orders, evaluate
+from .forms import (
+    Coefficient,
+    _fixed_form_key,
+    build_form,
+    coefficient_expressions,
+    derivative_orders,
+    evaluate,
+)
 from .geometry import SimplicialDomain, positive_integer
 from .spaces import TransformedBasis
 
@@ -514,6 +521,7 @@ class GalerkinField:
             max_intermediate_entries, "max_intermediate_entries"
         )
         self.problem, self.basis = problem, basis
+        self._refined_field = None
         self._space = space
         self.dimension, self.value_shape = basis.dimension, value_shape
         self.form = build_form(problem.weak, value_shape, problem.geometry.ambient_dimension)
@@ -615,6 +623,7 @@ class GalerkinField:
 
     def _prepare_action_plan(self):
         """Bind immutable weak-form and quadrature data once per prepared table."""
+        constants = {}
         by_measure = {
             ("volume", None if name == "all" else name): table
             for name, table in self._volumes.items()
@@ -622,6 +631,15 @@ class GalerkinField:
         by_measure.update((("boundary", name), table) for name, table in self._boundary.items())
         plan = []
         for integral in self.form.integrals:
+            expressions = [integral.integrand]
+            while expressions:
+                expression = expressions.pop()
+                if expression.op == "constant" and type(expression.data) in (bool, int, float):
+                    if expression not in constants:
+                        constants[expression] = torch.as_tensor(
+                            expression.data, dtype=self.dtype, device=self.device
+                        ).reshape(1, 1, 1, *expression.shape)
+                expressions.extend(expression.args)
             label = integral.measure.label or (
                 "all" if integral.measure.kind == "boundary" else None
             )
@@ -634,9 +652,44 @@ class GalerkinField:
                 "normals": table.normals,
                 "dtype": self.dtype,
                 "device": self.device,
+                "constants": constants,
             }
             plan.append((integral.integrand, key, table, fixed))
         self._action_plan = tuple(plan)
+
+    def _same_fixed_action(self, other):
+        """Check whether a downstream training run can reuse detached targets."""
+        if (
+            self.basis is not other.basis
+            or self.geometry is not other.geometry
+            or self.device != other.device
+            or self.dtype != other.dtype
+            or self.quadrature_order != other.quadrature_order
+            or self.max_intermediate_entries != other.max_intermediate_entries
+        ):
+            return False
+        key = _fixed_form_key(self.form)
+        if key is None or key != _fixed_form_key(other.form):
+            return False
+        for current, previous in (
+            (self._volumes, other._volumes),
+            (self._boundary, other._boundary),
+        ):
+            if current.keys() != previous.keys():
+                return False
+            for name, table in current.items():
+                old = previous[name]
+                if (
+                    table.basis.keys() != old.basis.keys()
+                    or not torch.equal(table.weights, old.weights)
+                    or not torch.equal(table.points, old.points)
+                ):
+                    return False
+                if table.normals is not None and not torch.equal(table.normals, old.normals):
+                    return False
+                if not all(torch.equal(values, old.basis[k]) for k, values in table.basis.items()):
+                    return False
+        return True
 
     def _prepare_adaptive(self, initial_order, tolerance):
         if initial_order > _MAX_ADAPTIVE_ORDER:
@@ -703,6 +756,7 @@ class GalerkinField:
         for table in (*self._volumes.values(), *self._boundary.values()):
             table.to(device, dtype)
         self.mass_matrix = self.mass_matrix.to(device=device, dtype=dtype)
+        self._refined_field = None
         self._prepare_action_plan()
         return self
 
@@ -1112,14 +1166,28 @@ class GalerkinField:
         refined_order = positive_integer(refined_order, "order", 0)
         if refined_order <= self.quadrature_order:
             raise ValueError("order must be greater than the field quadrature order.")
-        refined = self.problem.field(
-            basis=self.basis,
-            quadrature=refined_order,
-            max_quadrature_points=self.max_quadrature_points,
-            max_intermediate_entries=self.max_intermediate_entries,
-            device=self.device,
-            dtype=self.dtype,
+        key = (
+            refined_order,
+            self.max_quadrature_points,
+            self.max_intermediate_entries,
+            torch.is_inference_mode_enabled(),
+            torch.is_autocast_enabled(self.device.type),
+            torch.get_autocast_dtype(self.device.type),
+            torch.get_float32_matmul_precision(),
         )
+        cached = self._refined_field
+        if cached is None or cached[0] != key:
+            refined = self.problem.field(
+                basis=self.basis,
+                quadrature=refined_order,
+                max_quadrature_points=self.max_quadrature_points,
+                max_intermediate_entries=self.max_intermediate_entries,
+                device=self.device,
+                dtype=self.dtype,
+            )
+            self._refined_field = (key, refined)
+        else:
+            refined = cached[1]
         return torch.linalg.vector_norm(refined(z) - self(z), dim=-1)
 
     def state_derivatives(self, z, order):
@@ -1159,11 +1227,16 @@ class GalerkinField:
             raise ValueError("States and field tables must share device and dtype.")
         return z.reshape(-1, self.dimension), z.shape[:-1]
 
-    def _action(self, z, test):
+    def _action(self, z, test, reconstructions):
         result = z.new_zeros((len(z), test.stop - test.start))
         caches = {}
         for integrand, key, table, fixed in self._action_plan:
-            context = {**fixed, "z": z, "test": test}
+            context = {
+                **fixed,
+                "z": z,
+                "test": test,
+                "reconstructed": reconstructions.setdefault(key, {}),
+            }
             values = evaluate(integrand, context, caches.setdefault(key, {}))
             expected = (len(z), test.stop - test.start, len(table.points))
             try:
@@ -1181,9 +1254,14 @@ class GalerkinField:
             return z.clone().reshape((*batch_shape, self.dimension))
         denominator = max(1, len(z) * max(1, len(self._volume.points)))
         chunk = max(1, min(self.dimension, self.max_intermediate_entries // denominator))
+        reconstructions = {}
+        if chunk == self.dimension:
+            return self._action(z, slice(0, self.dimension), reconstructions).reshape(
+                (*batch_shape, self.dimension)
+            )
         action = torch.cat(
             [
-                self._action(z, slice(start, min(start + chunk, self.dimension)))
+                self._action(z, slice(start, min(start + chunk, self.dimension)), reconstructions)
                 for start in range(0, self.dimension, chunk)
             ],
             dim=1,

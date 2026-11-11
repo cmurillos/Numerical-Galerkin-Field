@@ -3,7 +3,7 @@ import math
 import pytest
 import torch
 
-from ngfield import GalerkinProblem, time_error
+from ngfield import GalerkinProblem, evolution, time_error
 
 
 def decay_field(dtype=torch.float64):
@@ -57,6 +57,29 @@ def test_adaptive_taylor_is_the_default_and_supports_backward_time():
         atol=2e-8,
         rtol=2e-8,
     )
+
+
+def test_adaptive_rejection_reuses_the_same_jets(monkeypatch):
+    field = decay_field()
+    z0 = torch.tensor([0.4, -0.2, 0.7], dtype=field.dtype, requires_grad=True)
+    times = torch.tensor([0.0, 0.5], dtype=field.dtype)
+    attempts = []
+    taylor_step = evolution._taylor_step
+
+    def counted(state, step, order, jets):
+        attempts.append((state, step, jets))
+        return taylor_step(state, step, order, jets)
+
+    monkeypatch.setattr(evolution, "_taylor_step", counted)
+    result = field.solve(z0, times, tolerance=1e-10)
+
+    first, retry = attempts[:2]
+    assert first[0] is retry[0] and first[2] is retry[2]
+    assert 0 < retry[1] < first[1]
+    expected = math.exp(-0.5)
+    torch.testing.assert_close(result[-1], expected * z0, atol=2e-9, rtol=2e-9)
+    result[-1].sum().backward()
+    torch.testing.assert_close(z0.grad, torch.full_like(z0, expected), atol=2e-9, rtol=2e-9)
 
 
 def test_high_order_taylor_keeps_nonlinear_jets_correct_for_negative_times():

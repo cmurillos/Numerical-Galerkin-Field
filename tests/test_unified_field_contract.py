@@ -220,7 +220,7 @@ def test_direct_static_lift_and_region_and_boundary_measures_keep_physical_equil
 
 
 @pytest.mark.parametrize("quadrature", [None, 6, 1e-8])
-def test_numerical_options_and_fixed_callbacks_are_shared_by_both_routes(quadrature):
+def test_numerical_options_and_fixed_callbacks_are_shared_by_both_routes(quadrature, monkeypatch):
     geometry = interval(2)
     basis = Space(geometry=geometry, components=1).basis(size=2)
     data = {"value": 2.0, "calls": 0}
@@ -240,7 +240,17 @@ def test_numerical_options_and_fixed_callbacks_are_shared_by_both_routes(quadrat
     expected = H(z)
     calls = data["calls"]
     data["value"] = 100
+    einsum = torch.einsum
+    reconstructions = []
+
+    def counted(equation, *operands):
+        if equation == "bn,qn...->bq...":
+            reconstructions.append(None)
+        return einsum(equation, *operands)
+
+    monkeypatch.setattr(torch, "einsum", counted)
     torch.testing.assert_close(G(z), expected)
+    assert len(reconstructions) == 1
     torch.func.jacrev(G)(z[0])
     assert data["calls"] == calls
     assert G.quadrature_mode == H.quadrature_mode and G.quadrature_order == H.quadrature_order

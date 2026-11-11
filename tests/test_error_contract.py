@@ -107,3 +107,34 @@ def test_quadrature_error_requires_a_strictly_higher_order():
             assert "greater" in str(exc)
         else:
             raise AssertionError("A non-refined quadrature order must be rejected.")
+
+
+def test_quadrature_error_reuses_only_the_matching_prepared_field(monkeypatch):
+    field, _ = projection_field(2)
+    field_factory = field.problem.field
+    constructions = []
+
+    def counted(**options):
+        constructions.append((options["quadrature"], options["dtype"]))
+        return field_factory(**options)
+
+    monkeypatch.setattr(field.problem, "field", counted)
+    z = torch.tensor([[0.5, -0.1], [-0.2, 0.3]], dtype=field.dtype)
+    expected = field.quadrature_error(z, order=10)
+    torch.testing.assert_close(field.quadrature_error(z, order=10), expected, atol=0, rtol=0)
+    assert len(constructions) == 1
+    field.quadrature_error(z, order=12)
+    with torch.inference_mode():
+        field.quadrature_error(z, order=12)
+    z.requires_grad_()
+    field.quadrature_error(z, order=12).sum().backward()
+    assert torch.isfinite(z.grad).all()
+    field.to(dtype=torch.float32)
+    field.quadrature_error(z.float(), order=12)
+    assert constructions == [
+        (10, torch.float64),
+        (12, torch.float64),
+        (12, torch.float64),
+        (12, torch.float64),
+        (12, torch.float32),
+    ]
